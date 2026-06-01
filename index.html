@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ThesisReader — 学术论文阅读助手</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <span class="logo">📖</span>
+      <h1>ThesisReader</h1>
+      <span class="tagline">学术论文快读助手</span>
+    </div>
+    <nav class="tabs" id="tabs">
+      <button class="tab" data-view="settings">设置</button>
+      <button class="tab" data-view="upload">上传</button>
+      <button class="tab" data-view="results">结果</button>
+      <button class="tab" data-view="chat">对话</button>
+    </nav>
+  </header>
+
+  <main class="app-main">
+    <!-- 设置视图 -->
+    <section class="view" id="view-settings" hidden>
+      <h2>大模型配置</h2>
+      <p class="hint">支持第三方云端大模型与本地 Ollama。API Key 仅保存在本机浏览器中。</p>
+
+      <div class="profile-bar">
+        <label class="profile-select-row">
+          <span>已保存配置</span>
+          <select id="profileSelect">
+            <option value="">— 选择已保存的配置 —</option>
+          </select>
+          <button type="button" class="ghost" id="deleteProfileBtn" disabled>删除</button>
+        </label>
+        <p class="hint small profile-hint">保存配置后会自动记录到这里，可随时切换之前用过的模型。</p>
+      </div>
+
+      <div class="form-grid">
+        <label class="form-row">
+          <span>API URL</span>
+          <input type="text" id="apiUrl" placeholder="如 https://api.openai.com 或 https://api.deepseek.com" />
+        </label>
+
+        <label class="form-row">
+          <span>API Key</span>
+          <div class="input-with-action">
+            <input type="password" id="apiKey" placeholder="sk-..." />
+            <button type="button" class="ghost" id="toggleKeyVisibility">显示</button>
+          </div>
+        </label>
+
+        <label class="form-row">
+          <span>接口格式</span>
+          <select id="apiFormat">
+            <option value="openai">OpenAI 兼容 (/v1/chat/completions)</option>
+            <option value="anthropic">Anthropic (/v1/messages)</option>
+            <option value="ollama">Ollama 本地 (localhost:11434)</option>
+          </select>
+        </label>
+
+        <label class="form-row">
+          <span>模型名称</span>
+          <div class="input-with-action">
+            <input type="text" id="modelName" placeholder="如 gpt-4o / claude-3-5-sonnet-latest / llava" />
+            <button type="button" class="ghost" id="fetchModelsBtn">获取模型</button>
+          </div>
+        </label>
+
+        <div class="form-row model-list-row" id="modelListRow" hidden>
+          <span></span>
+          <div class="model-chips" id="modelChips"></div>
+        </div>
+
+        <p class="hint small ollama-hint" id="ollamaHint" hidden>
+          本地 Ollama：URL 一般为 <code>http://localhost:11434</code>，无需 API Key。点「获取模型」可列出已下载的模型。
+          若获取失败，请在启动 Ollama 前设置环境变量 <code>OLLAMA_ORIGINS=*</code> 以允许浏览器访问。图文分析需选用支持视觉的模型（如 <code>llava</code>、<code>llama3.2-vision</code>）。
+        </p>
+
+        <label class="form-row">
+          <span>最大页数（0 表示不限制）</span>
+          <input type="number" id="maxPages" min="0" value="0" />
+        </label>
+
+        <label class="form-row">
+          <span>上下文上限 (tokens)</span>
+          <input type="number" id="contextLimit" min="1000" step="1000" value="128000" />
+        </label>
+
+        <label class="form-row checkbox-row">
+          <input type="checkbox" id="rememberKey" checked />
+          <span>在本机浏览器记住 API Key（关闭则刷新即清除）</span>
+        </label>
+      </div>
+
+      <h3>分析维度（Section）</h3>
+      <p class="hint">可启用 / 禁用 / 修改 / 增删要求模型输出的分析维度。</p>
+      <label class="auto-suggest-row">
+        <input type="checkbox" id="autoSuggestSections" />
+        <span>让 AI 额外推测维度：模型阅读论文后，自动推测你可能想深入了解、但上面未覆盖的维度并一并输出（结果中以紫色标题并标注「AI 生成」区分）。</span>
+      </label>
+      <div id="sectionEditor" class="section-editor"></div>
+      <div class="actions">
+        <button class="ghost" id="addSectionBtn">+ 新增维度</button>
+        <button class="ghost" id="resetSectionsBtn">恢复默认</button>
+      </div>
+
+      <div class="actions sticky-actions">
+        <button class="primary" id="saveConfigBtn">保存配置</button>
+        <button class="danger" id="clearStorageBtn">清除全部存储</button>
+      </div>
+    </section>
+
+    <!-- 上传视图 -->
+    <section class="view" id="view-upload" hidden>
+      <h2>上传论文</h2>
+      <p class="hint">支持一次性上传多篇 PDF 论文。</p>
+
+      <div id="dropzone" class="dropzone">
+        <input type="file" id="fileInput" accept="application/pdf" multiple hidden />
+        <p class="dz-main">将 PDF 文件拖到此处</p>
+        <p class="dz-sub">或 <button type="button" class="link" id="browseBtn">点击选择文件</button></p>
+      </div>
+
+      <div id="fileList" class="file-list"></div>
+
+      <div class="actions">
+        <button class="primary" id="analyzeBtn" disabled>开始分析</button>
+        <button class="ghost" id="clearFilesBtn" disabled>清空列表</button>
+      </div>
+    </section>
+
+    <!-- 对话视图 -->
+    <section class="view" id="view-chat" hidden>
+      <h2>与论文对话</h2>
+      <p class="hint">基于已分析的论文与模型对话，类似 NotebookLM。模型将利用论文的结构化解读以及（可选）原文页面图像作答。</p>
+
+      <div class="chat-empty" id="chatEmpty">
+        <p>尚无已分析的论文，请先在「上传」视图完成分析。</p>
+      </div>
+
+      <div class="chat-container" id="chatContainer" hidden>
+        <aside class="chat-sidebar">
+          <h3>论文上下文</h3>
+          <p class="hint small">勾选要纳入对话的论文：</p>
+          <div id="chatPaperList" class="chat-paper-list"></div>
+          <label class="chat-toggle">
+            <input type="checkbox" id="chatIncludeImages" />
+            <span>同时附带原文页面图片<br /><small>开启后 token 消耗显著增加，但能让模型看到图表与公式细节</small></span>
+          </label>
+          <div class="chat-monitor">
+            <div class="monitor-line">
+              <span>预估输入 tokens</span>
+              <strong id="chatEstTokens">0</strong>
+            </div>
+            <div class="monitor-line">
+              <span>上次实际 tokens</span>
+              <strong id="chatLastTokens">—</strong>
+            </div>
+            <div class="monitor-line">
+              <span>上下文上限</span>
+              <strong id="chatLimit">128000</strong>
+            </div>
+            <div class="progress-bar"><div class="progress-bar-fill" id="chatUsageFill"></div></div>
+            <p class="monitor-warning" id="chatWarning" hidden></p>
+          </div>
+          <button class="ghost" id="chatClearBtn">清空对话</button>
+        </aside>
+        <div class="chat-main">
+          <div id="chatMessages" class="chat-messages">
+            <p class="empty-state">提出你的第一个问题吧（例如：「论文方法的核心公式是什么？请引用论文中的公式」）。</p>
+          </div>
+          <div class="chat-composer">
+            <textarea id="chatInput" rows="3" placeholder="按 Cmd/Ctrl + Enter 发送"></textarea>
+            <div class="composer-actions">
+              <span class="composer-hint" id="composerHint"></span>
+              <button class="primary" id="chatSendBtn" disabled>发送</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 结果视图 -->
+    <section class="view" id="view-results" hidden>
+      <div class="results-header">
+        <h2>分析结果</h2>
+        <div class="progress" id="progress" hidden>
+          <span id="progressText">0 / 0</span>
+          <div class="progress-bar"><div class="progress-bar-fill" id="progressFill"></div></div>
+        </div>
+      </div>
+      <div id="resultsList" class="results-list">
+        <p class="empty-state">尚无分析结果。请前往「上传」视图选择论文并开始分析。</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
