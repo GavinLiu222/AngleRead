@@ -9,6 +9,22 @@ function joinUrl(base, path) {
   return `${b}/${p}`;
 }
 
+/**
+ * 解析聊天 / 消息端点。基地址通常写到版本号之前（如 `https://api.openai.com`），
+ * 但也有服务商的兼容层自带版本段（Gemini 的 `/v1beta/openai`、智谱的 `/api/paas/v4`），
+ * 用户也常常手滑把 `/v1` 一起粘进来。这里统一判断：路径里已有版本号段就不再补 `/v1`。
+ * @param {string} base 用户填写的 API URL
+ * @param {string} path 'chat/completions' 或 'messages'
+ */
+function apiEndpoint(base, path) {
+  const b = String(base || '').replace(/\/+$/, '');
+  if (!b) return '/' + path;
+  if (b.endsWith('/' + path)) return b;
+  const afterHost = b.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, '');
+  const versioned = /\/v\d[\w.-]*(?=\/|$)/i.test(afterHost);
+  return versioned ? `${b}/${path}` : `${b}/v1/${path}`;
+}
+
 async function postJson(url, headers, body) {
   const res = await fetch(url, {
     method: 'POST',
@@ -27,20 +43,20 @@ async function postJson(url, headers, body) {
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error('响应不是有效的 JSON: ' + text.slice(0, 200));
+    throw new Error('Response was not valid JSON: ' + text.slice(0, 200));
   }
 }
 
 function pickOpenAIText(msg) {
-  if (!msg) throw new Error('响应缺少 message 字段');
+  if (!msg) throw new Error('Response is missing the `message` field.');
   let text = '';
   if (typeof msg.content === 'string') {
     text = msg.content;
   } else if (Array.isArray(msg.content)) {
     text = msg.content.map((c) => (typeof c === 'string' ? c : c.text || '')).join('\n');
   }
-  // 推理模型（如经 Ollama 兼容层的 qwen3、deepseek-r1）有时把输出放在
-  // reasoning_content / reasoning 字段而 content 为空，此处兜底回退。
+  // Reasoning models (e.g. qwen3 / deepseek-r1 behind Ollama's compat layer) sometimes
+  // put the answer in reasoning_content / reasoning and leave content empty.
   if (!text.trim()) {
     text = msg.reasoning_content || msg.reasoning || text;
   }
@@ -48,7 +64,7 @@ function pickOpenAIText(msg) {
 }
 
 function pickAnthropicText(parts) {
-  if (!Array.isArray(parts)) throw new Error('响应缺少 content 数组字段');
+  if (!Array.isArray(parts)) throw new Error('Response is missing the `content` array.');
   return parts.map((p) => p.text || '').join('\n');
 }
 
@@ -72,7 +88,7 @@ function normalizeAnthropicUsage(u) {
 function buildOpenAIContent(prompt, images) {
   const content = [{ type: 'text', text: prompt }];
   images.forEach((dataUrl, i) => {
-    content.push({ type: 'text', text: `--- 第 ${i + 1} 页 ---` });
+    content.push({ type: 'text', text: `--- Page ${i + 1} ---` });
     content.push({ type: 'image_url', image_url: { url: dataUrl } });
   });
   return content;
@@ -81,7 +97,7 @@ function buildOpenAIContent(prompt, images) {
 function buildAnthropicContent(prompt, images) {
   const content = [{ type: 'text', text: prompt }];
   images.forEach((dataUrl, i) => {
-    content.push({ type: 'text', text: `--- 第 ${i + 1} 页 ---` });
+    content.push({ type: 'text', text: `--- Page ${i + 1} ---` });
     content.push({
       type: 'image',
       source: {
@@ -95,7 +111,7 @@ function buildAnthropicContent(prompt, images) {
 }
 
 async function callOpenAI({ apiUrl, apiKey, model }, prompt, images) {
-  const url = joinUrl(apiUrl, '/v1/chat/completions');
+  const url = apiEndpoint(apiUrl, 'chat/completions');
   const content = buildOpenAIContent(prompt, images);
   const body = {
     model,
@@ -111,7 +127,7 @@ async function callOpenAI({ apiUrl, apiKey, model }, prompt, images) {
 }
 
 async function callAnthropic({ apiUrl, apiKey, model }, prompt, images) {
-  const url = joinUrl(apiUrl, '/v1/messages');
+  const url = apiEndpoint(apiUrl, 'messages');
   const content = buildAnthropicContent(prompt, images);
   const body = {
     model,
@@ -134,8 +150,8 @@ async function callAnthropic({ apiUrl, apiKey, model }, prompt, images) {
   };
 }
 
-// Ollama 暴露 OpenAI 兼容接口（/v1/chat/completions），但本地无需鉴权；
-// 此处补一个占位 Key，保证 Authorization 头存在即可。
+// Ollama exposes an OpenAI-compatible endpoint but needs no auth locally;
+// a placeholder key keeps the Authorization header present.
 function normalizeForOpenAI(config) {
   if (config.apiFormat === 'ollama') {
     return { ...config, apiKey: config.apiKey || 'ollama' };
@@ -169,7 +185,7 @@ export async function chatLLM(config, systemPrompt, turns) {
 }
 
 async function chatOpenAI({ apiUrl, apiKey, model }, systemPrompt, turns) {
-  const url = joinUrl(apiUrl, '/v1/chat/completions');
+  const url = apiEndpoint(apiUrl, 'chat/completions');
   const messages = [];
   if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
   for (const t of turns) {
@@ -188,7 +204,7 @@ async function chatOpenAI({ apiUrl, apiKey, model }, systemPrompt, turns) {
 }
 
 async function chatAnthropic({ apiUrl, apiKey, model }, systemPrompt, turns) {
-  const url = joinUrl(apiUrl, '/v1/messages');
+  const url = apiEndpoint(apiUrl, 'messages');
   const messages = [];
   for (const t of turns) {
     if (t.images && t.images.length) {
@@ -220,21 +236,21 @@ async function chatAnthropic({ apiUrl, apiKey, model }, systemPrompt, turns) {
 }
 
 function assertConfig(config) {
-  if (!config.apiUrl) throw new Error('请先在设置中填写 API URL');
+  if (!config.apiUrl) throw new Error('Set an API URL in Settings first.');
   if (config.apiFormat !== 'ollama' && !config.apiKey) {
-    throw new Error('请先在设置中填写 API Key');
+    throw new Error('Set an API key in Settings first.');
   }
-  if (!config.model) throw new Error('请先在设置中填写模型名称');
+  if (!config.model) throw new Error('Choose a model in Settings first.');
 }
 
 /**
- * 拉取可用模型列表。
- * - ollama：调用 /api/tags 列出本地已下载的模型
- * - openai / anthropic：调用 /v1/models
- * @returns {Promise<string[]>} 模型名数组
+ * Fetch the list of models the endpoint exposes.
+ * - ollama: /api/tags, i.e. the models pulled locally
+ * - openai / anthropic: /v1/models
+ * @returns {Promise<string[]>} model ids
  */
 export async function fetchModelList({ apiUrl, apiKey, apiFormat }) {
-  if (!apiUrl) throw new Error('请先填写 API URL');
+  if (!apiUrl) throw new Error('Enter an API URL first.');
 
   if (apiFormat === 'ollama') {
     const res = await fetch(joinUrl(apiUrl, '/api/tags'));
@@ -253,7 +269,7 @@ export async function fetchModelList({ apiUrl, apiKey, apiFormat }) {
   } else if (apiKey) {
     headers['Authorization'] = `Bearer ${apiKey}`;
   }
-  const res = await fetch(joinUrl(apiUrl, '/v1/models'), { headers });
+  const res = await fetch(apiEndpoint(apiUrl, 'models'), { headers });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   return (data.data || data.models || [])

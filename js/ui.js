@@ -10,10 +10,19 @@ import {
   deleteProfile,
   rememberProfile,
   profileSignature,
+  reportLanguageDirective,
 } from './config.js';
 import { estimateChatTokens, estimateTextTokens, fetchModelList } from './llmClient.js';
+import { API_PRESETS, MODEL_PRESETS, guessProviderKey } from './presets.js';
 
 const VIEWS = ['settings', 'upload', 'results', 'chat'];
+
+const ICON_DOC =
+  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.4H7.6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h8.8a2 2 0 0 0 2-2V8.2Z"/><path d="M14 3.4V8.2h4.4"/><path d="M8.9 13h6.2M8.9 16.3h4"/></svg>';
+const ICON_DOWNLOAD =
+  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.4v10"/><path d="m7.9 10.6 4.1 4.1 4.1-4.1"/><path d="M5.2 19.4h13.6"/></svg>';
+const ICON_USER =
+  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8.6" r="3.5"/><path d="M5.2 19.6a6.8 6.8 0 0 1 13.6 0"/></svg>';
 
 export function switchView(name) {
   if (!VIEWS.includes(name)) return;
@@ -52,6 +61,7 @@ export function renderSettings() {
   document.getElementById('contextLimit').value = cfg.contextLimit;
   document.getElementById('rememberKey').checked = cfg.rememberKey;
   document.getElementById('autoSuggestSections').checked = cfg.autoSuggestSections;
+  setReportLanguage(cfg.reportLanguage);
   renderProfiles();
   updateProviderUI();
   renderModelChips([]);
@@ -64,7 +74,7 @@ function renderProfiles() {
   if (!select) return;
   const profiles = getProfiles();
   const activeSig = profileSignature(getConfig());
-  select.innerHTML = '<option value="">— 选择已保存的配置 —</option>';
+  select.innerHTML = '<option value="">— Select a saved profile —</option>';
   profiles.forEach((p) => {
     const opt = document.createElement('option');
     opt.value = p.id;
@@ -94,7 +104,7 @@ function updateProviderUI() {
   const ollamaHint = document.getElementById('ollamaHint');
   if (ollamaHint) ollamaHint.hidden = !isOllama;
   if (isOllama && !urlInput.value.trim()) urlInput.value = 'http://localhost:11434';
-  keyInput.placeholder = isOllama ? '本地 Ollama 无需 API Key（可留空）' : 'sk-...';
+  keyInput.placeholder = isOllama ? 'Local Ollama needs no API key' : 'sk-...';
 }
 
 function renderModelChips(models) {
@@ -121,6 +131,18 @@ function renderModelChips(models) {
   row.hidden = false;
 }
 
+/* ---------------- report language ---------------- */
+
+function getReportLanguage() {
+  return document.querySelector('input[name="reportLanguage"]:checked')?.value === 'zh' ? 'zh' : 'en';
+}
+
+function setReportLanguage(value) {
+  const target = value === 'zh' ? 'zh' : 'en';
+  const el = document.querySelector(`input[name="reportLanguage"][value="${target}"]`);
+  if (el) el.checked = true;
+}
+
 function readConfigForm() {
   return {
     apiUrl: document.getElementById('apiUrl').value.trim(),
@@ -128,6 +150,206 @@ function readConfigForm() {
     apiFormat: document.getElementById('apiFormat').value,
     model: document.getElementById('modelName').value.trim(),
   };
+}
+
+/* ---------------- preset comboboxes (API URL / model) ---------------- */
+/* 输入框本身仍是自由文本，下拉只提供建议；选中即写入输入框。 */
+
+const FORMAT_NOTE = {
+  anthropic: 'Anthropic format',
+  ollama: 'Local · no API key',
+};
+
+let combosReady = false;
+
+function initPresetCombos() {
+  if (combosReady) return;
+  const apiRoot = document.querySelector('[data-combo="api"]');
+  const modelRoot = document.querySelector('[data-combo="model"]');
+  if (!apiRoot || !modelRoot) return;
+  combosReady = true;
+
+  initCombo(apiRoot, {
+    buildGroups: () => [
+      {
+        items: API_PRESETS.map((p) => ({
+          value: p.url,
+          label: p.label,
+          note: p.note || FORMAT_NOTE[p.format] || '',
+          format: p.format,
+        })),
+      },
+    ],
+    footNote: 'Base URL only — the version segment and endpoint path are added automatically.',
+    onPick: (item) => {
+      if (!item.format) return;
+      const formatSelect = document.getElementById('apiFormat');
+      if (formatSelect.value !== item.format) {
+        formatSelect.value = item.format;
+        renderModelChips([]);
+      }
+      updateProviderUI();
+    },
+  });
+
+  initCombo(modelRoot, {
+    buildGroups: () => {
+      const active = guessProviderKey(readConfigForm());
+      const groups = MODEL_PRESETS.map((g) => ({
+        key: g.key,
+        group: g.group,
+        hint: g.key === active ? 'matches your endpoint' : '',
+        items: g.items.map((m) => ({ value: m.id, label: m.id, note: m.note || '' })),
+      }));
+      groups.sort((a, b) => Number(b.key === active) - Number(a.key === active));
+      return groups;
+    },
+    footNote: 'Vision-capable models only — this tool feeds the model page images. Any model id can also be typed by hand.',
+  });
+}
+
+function initCombo(root, { buildGroups, onPick, footNote }) {
+  const input = root.querySelector('input');
+  const toggle = root.querySelector('[data-combo-toggle]');
+  const menu = root.querySelector('[data-combo-menu]');
+  let options = [];
+  let active = -1;
+  // 用箭头 / 输入框打开时浏览全部；只有真正在输入时才按关键字过滤
+  let filtering = false;
+
+  function close() {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    root.classList.remove('open');
+    toggle.setAttribute('aria-expanded', 'false');
+    active = -1;
+    filtering = false;
+  }
+
+  function open({ filter = false } = {}) {
+    filtering = filter;
+    render();
+    menu.hidden = false;
+    root.classList.add('open');
+    toggle.setAttribute('aria-expanded', 'true');
+    const current = options.findIndex((o) => o.item.value === input.value.trim());
+    if (current >= 0) options[current].el.scrollIntoView({ block: 'nearest' });
+  }
+
+  function highlight(next) {
+    if (!options.length) return;
+    if (active >= 0) options[active].el.classList.remove('active');
+    active = (next + options.length) % options.length;
+    const el = options[active].el;
+    el.classList.add('active');
+    el.scrollIntoView({ block: 'nearest' });
+  }
+
+  function pick(item) {
+    input.value = item.value;
+    close();
+    onPick?.(item);
+    input.focus();
+  }
+
+  function render() {
+    const query = filtering ? input.value.trim().toLowerCase() : '';
+    const current = input.value.trim();
+    menu.innerHTML = '';
+    options = [];
+    active = -1;
+    for (const group of buildGroups()) {
+      const matches = group.items.filter(
+        (it) =>
+          !query ||
+          it.value.toLowerCase().includes(query) ||
+          (it.label || '').toLowerCase().includes(query) ||
+          (group.group || '').toLowerCase().includes(query),
+      );
+      if (!matches.length) continue;
+      if (group.group) {
+        const head = document.createElement('div');
+        head.className = 'combo-group';
+        head.innerHTML =
+          escapeText(group.group) +
+          (group.hint ? `<span class="cg-hint">${escapeText(group.hint)}</span>` : '');
+        menu.appendChild(head);
+      }
+      for (const item of matches) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'combo-option';
+        btn.setAttribute('role', 'option');
+        const showValue = item.label && item.label !== item.value;
+        if (item.value === current) btn.classList.add('selected');
+        btn.innerHTML =
+          '<span class="co-main">' +
+          `<span class="co-label">${escapeText(item.label || item.value)}</span>` +
+          (item.note ? `<span class="co-note">${escapeText(item.note)}</span>` : '') +
+          '</span>' +
+          (showValue ? `<span class="co-value">${escapeText(item.value)}</span>` : '');
+        // mousedown 上阻止默认行为，焦点留在输入框里，click 才能稳定触发
+        btn.addEventListener('mousedown', (e) => e.preventDefault());
+        btn.addEventListener('click', () => pick(item));
+        menu.appendChild(btn);
+        options.push({ el: btn, item });
+      }
+    }
+    if (!options.length) {
+      const empty = document.createElement('div');
+      empty.className = 'combo-empty';
+      empty.textContent = 'No preset matches — type your own value.';
+      menu.appendChild(empty);
+    } else if (footNote) {
+      const foot = document.createElement('div');
+      foot.className = 'combo-foot';
+      foot.textContent = footNote;
+      menu.appendChild(foot);
+    }
+  }
+
+  toggle.addEventListener('mousedown', (e) => e.preventDefault());
+  toggle.addEventListener('click', () => {
+    if (menu.hidden) {
+      open();
+      input.focus();
+    } else {
+      close();
+    }
+  });
+
+  input.addEventListener('focus', () => open());
+  input.addEventListener('input', () => {
+    filtering = true;
+    if (menu.hidden) open({ filter: true });
+    else render();
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (menu.hidden) open();
+      highlight(active + (e.key === 'ArrowDown' ? 1 : -1));
+    } else if (e.key === 'Enter') {
+      if (!menu.hidden && active >= 0) {
+        e.preventDefault();
+        pick(options[active].item);
+      } else {
+        close();
+      }
+    } else if (e.key === 'Escape' && !menu.hidden) {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    }
+  });
+
+  root.addEventListener('focusout', (e) => {
+    if (!root.contains(e.relatedTarget)) close();
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (!root.contains(e.target)) close();
+  });
 }
 
 function renderSectionEditor() {
@@ -140,9 +362,9 @@ function renderSectionEditor() {
     row.className = 'section-item';
     row.innerHTML = `
       <input type="checkbox" data-action="toggle" data-idx="${idx}" ${s.enabled ? 'checked' : ''} />
-      <input type="text" data-action="title" data-idx="${idx}" value="${escapeAttr(s.title)}" placeholder="维度标题" />
-      <input type="text" class="prompt-input" data-action="prompt" data-idx="${idx}" value="${escapeAttr(s.prompt)}" placeholder="提示语" />
-      <button class="remove" data-action="remove" data-idx="${idx}" title="删除">×</button>
+      <input type="text" data-action="title" data-idx="${idx}" value="${escapeAttr(s.title)}" placeholder="Section title" />
+      <input type="text" class="prompt-input" data-action="prompt" data-idx="${idx}" value="${escapeAttr(s.prompt)}" placeholder="Instruction for the model" />
+      <button class="remove" data-action="remove" data-idx="${idx}" title="Remove">×</button>
     `;
     root.appendChild(row);
   });
@@ -181,7 +403,7 @@ export function bindSettingsActions({ onSaved }) {
     const btn = document.getElementById('toggleKeyVisibility');
     const showing = input.type === 'text';
     input.type = showing ? 'password' : 'text';
-    btn.textContent = showing ? '显示' : '隐藏';
+    btn.textContent = showing ? 'Show' : 'Hide';
   });
 
   // 切换到某个已保存的配置档案
@@ -203,7 +425,7 @@ export function bindSettingsActions({ onSaved }) {
       contextLimit: p.contextLimit || cfg.contextLimit,
     });
     document.getElementById('deleteProfileBtn').disabled = false;
-    toast(`已切换到「${p.name}」`, 'success');
+    toast(`Switched to “${p.name}”`, 'success');
   });
 
   // 删除选中的配置档案
@@ -212,10 +434,10 @@ export function bindSettingsActions({ onSaved }) {
     const id = select.value;
     if (!id) return;
     const p = getProfiles().find((x) => x.id === id);
-    if (!confirm(`确认删除配置「${p?.name || id}」？`)) return;
+    if (!confirm(`Delete the profile “${p?.name || id}”?`)) return;
     deleteProfile(id);
     renderProfiles();
-    toast('已删除该配置');
+    toast('Profile deleted');
   });
 
   // 接口格式联动（Ollama 提示 / 默认 URL / Key 占位符）
@@ -233,22 +455,22 @@ export function bindSettingsActions({ onSaved }) {
       document.getElementById('apiUrl').value = form.apiUrl;
     }
     if (!form.apiUrl) {
-      toast('请先填写 API URL', 'error');
+      toast('Enter an API URL first', 'error');
       return;
     }
     const original = btn.textContent;
     btn.disabled = true;
-    btn.textContent = '获取中…';
+    btn.textContent = 'Fetching…';
     try {
       const models = await fetchModelList(form);
       renderModelChips(models);
-      toast(models.length ? `发现 ${models.length} 个模型` : '未发现可用模型', models.length ? 'success' : 'error');
+      toast(models.length ? `Found ${models.length} models` : 'No models available', models.length ? 'success' : 'error');
     } catch (err) {
       renderModelChips([]);
       const tip = form.apiFormat === 'ollama'
-        ? '：请确认 Ollama 已启动，并设置 OLLAMA_ORIGINS=* 后重启'
+        ? ' — check that Ollama is running and was started with OLLAMA_ORIGINS=*'
         : '';
-      toast('获取模型失败' + tip + '（' + (err?.message || err) + '）', 'error');
+      toast('Could not fetch models' + tip + ' (' + (err?.message || err) + ')', 'error');
     } finally {
       btn.disabled = false;
       btn.textContent = original;
@@ -259,8 +481,8 @@ export function bindSettingsActions({ onSaved }) {
     const sections = getSections();
     sections.push({
       id: genSectionId(),
-      title: '新维度',
-      prompt: '请描述该维度希望模型输出的内容。',
+      title: 'New section',
+      prompt: 'Describe what you want the model to produce for this section.',
       enabled: true,
     });
     setSections(sections);
@@ -270,7 +492,7 @@ export function bindSettingsActions({ onSaved }) {
   document.getElementById('resetSectionsBtn').addEventListener('click', () => {
     resetSections();
     renderSectionEditor();
-    toast('已恢复默认分析维度');
+    toast('Default sections restored');
   });
 
   document.getElementById('saveConfigBtn').addEventListener('click', () => {
@@ -282,24 +504,51 @@ export function bindSettingsActions({ onSaved }) {
     const contextLimit = Math.max(1000, parseInt(document.getElementById('contextLimit').value, 10) || 128000);
     const rememberKey = document.getElementById('rememberKey').checked;
     const autoSuggestSections = document.getElementById('autoSuggestSections').checked;
+    const reportLanguage = getReportLanguage();
     const needKey = apiFormat !== 'ollama';
     if (!apiUrl || !model || (needKey && !apiKey)) {
-      toast(needKey ? '请至少填写 API URL、API Key 与模型名称' : '请至少填写 API URL 与模型名称', 'error');
+      toast(
+        needKey
+          ? 'API URL, API key and model are all required'
+          : 'API URL and model are both required',
+        'error',
+      );
       return;
     }
-    const next = setConfig({ apiUrl, apiKey, apiFormat, model, maxPages, contextLimit, rememberKey, autoSuggestSections });
+    const next = setConfig({
+      apiUrl,
+      apiKey,
+      apiFormat,
+      model,
+      maxPages,
+      contextLimit,
+      rememberKey,
+      autoSuggestSections,
+      reportLanguage,
+    });
     rememberProfile(next);
     renderProfiles();
-    toast('配置已保存', 'success');
+    toast('Configuration saved', 'success');
     onSaved?.();
   });
 
   document.getElementById('clearStorageBtn').addEventListener('click', () => {
-    if (!confirm('确认清除全部本机存储（API 信息与自定义分析维度）？')) return;
+    if (!confirm('Clear all local storage (API details and custom sections)?')) return;
     clearAllStorage();
     renderSettings();
-    toast('已清除本机存储');
+    toast('Local storage cleared');
   });
+
+  // 语言是即时生效的偏好，改完就落盘，不必等「Save configuration」
+  for (const radio of document.querySelectorAll('input[name="reportLanguage"]')) {
+    radio.addEventListener('change', () => {
+      const lang = getReportLanguage();
+      setConfig({ reportLanguage: lang });
+      toast(lang === 'zh' ? '报告输出语言：中文' : 'Report language: English', 'success');
+    });
+  }
+
+  initPresetCombos();
 }
 
 function escapeAttr(s) {
@@ -369,11 +618,11 @@ function renderFileList(files, refresh) {
     row.className = 'file-item';
     row.innerHTML = `
       <div class="name">
-        <span>📄</span>
+        <span class="doc-ico">${ICON_DOC}</span>
         <span>${escapeText(f.name)}</span>
         <span class="size">${formatSize(f.size)}</span>
       </div>
-      <button class="remove" title="移除">×</button>
+      <button class="remove" title="Remove">×</button>
     `;
     row.querySelector('.remove').addEventListener('click', () => {
       files.splice(idx, 1);
@@ -412,17 +661,17 @@ export function initResultsView(files) {
     card.innerHTML = `
       <div class="paper-card-head">
         <div class="title">
-          <span>📄</span>
+          <span class="doc-ico">${ICON_DOC}</span>
           <span>${escapeText(f.name)}</span>
         </div>
         <div class="right">
-          <button class="export-btn" data-role="export" title="导出为 Markdown" hidden>⬇ Markdown</button>
-          <span class="badge pending" data-role="badge">待处理</span>
+          <button class="export-btn" data-role="export" title="Export as Markdown" hidden>${ICON_DOWNLOAD}Markdown</button>
+          <span class="badge pending" data-role="badge">Queued</span>
           <span class="toggle">▼</span>
         </div>
       </div>
       <div class="paper-card-body" data-role="body">
-        <p class="hint" data-role="status">等待开始…</p>
+        <p class="hint" data-role="status">Waiting to start…</p>
       </div>
     `;
     card.querySelector('.paper-card-head').addEventListener('click', () => {
@@ -452,10 +701,10 @@ export function setItemStatus(idx, status, info = '') {
   const badge = card.querySelector('[data-role="badge"]');
   const body = card.querySelector('[data-role="body"]');
   const map = {
-    pending: ['待处理', 'pending'],
-    processing: ['处理中', 'processing'],
-    done: ['完成', 'done'],
-    error: ['失败', 'error'],
+    pending: ['Queued', 'pending'],
+    processing: ['Working', 'processing'],
+    done: ['Done', 'done'],
+    error: ['Failed', 'error'],
   };
   const [label, cls] = map[status] || map.pending;
   badge.textContent = label;
@@ -470,12 +719,12 @@ export function setItemStatus(idx, status, info = '') {
   }
 }
 
-/* 把维度的值（字符串 / 数组 / 对象）统一转成可读的 Markdown。
-   模型有时会无视"值为字符串"的要求，返回 [{point, benefit}, ...] 这类结构，
-   此处兜底转换，避免直接 dump 出 JSON 代码块。 */
+/* Normalise a section value (string / array / object) into readable Markdown.
+   Models sometimes ignore the "value must be a string" rule and return
+   [{point, benefit}, ...]; this keeps a raw JSON dump off the screen. */
 function valueToMarkdown(value) {
   if (value === undefined || value === null || value === '') {
-    return '（模型未返回此维度内容）';
+    return '_(the model returned nothing for this section)_';
   }
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) {
@@ -507,15 +756,15 @@ export function renderItemResult(idx, payload, onRetry) {
   body.innerHTML = '';
   const meta = document.createElement('p');
   meta.className = 'hint';
-  meta.textContent = `共 ${pageCount} 页，分析了 ${includedPages} 页`;
+  meta.textContent = `${pageCount} pages total, ${includedPages} analysed`;
   body.appendChild(meta);
   const usageLine = document.createElement('p');
   usageLine.className = 'usage-line';
   const parts = [];
-  if (typeof estimatedTokens === 'number') parts.push(`预估输入 <strong>${estimatedTokens.toLocaleString()}</strong>`);
-  if (usage?.input != null) parts.push(`实际输入 <strong>${usage.input.toLocaleString()}</strong>`);
-  if (usage?.output != null) parts.push(`输出 <strong>${usage.output.toLocaleString()}</strong>`);
-  if (parts.length) usageLine.innerHTML = '🔢 tokens — ' + parts.join('，');
+  if (typeof estimatedTokens === 'number') parts.push(`estimated in <strong>${estimatedTokens.toLocaleString()}</strong>`);
+  if (usage?.input != null) parts.push(`actual in <strong>${usage.input.toLocaleString()}</strong>`);
+  if (usage?.output != null) parts.push(`out <strong>${usage.output.toLocaleString()}</strong>`);
+  if (parts.length) usageLine.innerHTML = 'Tokens — ' + parts.join(' · ');
   if (parts.length) body.appendChild(usageLine);
   sectionsUsed.forEach((s) => {
     const block = document.createElement('div');
@@ -533,7 +782,7 @@ export function renderItemResult(idx, payload, onRetry) {
     const block = document.createElement('div');
     block.className = 'section-block';
     block.innerHTML = `
-      <div class="section-title ai-suggested">${escapeText(s.title)}<span class="ai-badge">AI 生成</span></div>
+      <div class="section-title ai-suggested">${escapeText(s.title)}<span class="ai-badge">AI added</span></div>
       <div class="section-content"></div>
     `;
     const contentEl = block.querySelector('.section-content');
@@ -557,7 +806,7 @@ export function renderItemError(idx, err, onRetry) {
   block.textContent = err?.message || String(err);
   const retryBtn = document.createElement('button');
   retryBtn.className = 'ghost retry';
-  retryBtn.textContent = '重试';
+  retryBtn.textContent = 'Retry';
   retryBtn.addEventListener('click', () => onRetry?.(idx));
   block.appendChild(document.createElement('br'));
   block.appendChild(retryBtn);
@@ -581,7 +830,11 @@ export function updateProgress(done, total) {
 const PAGE_REF_RE = /\[\[page:(\d+)\]\]/g;
 
 function substitutePageRefs(text) {
-  return text.replace(PAGE_REF_RE, (_, n) => `<span class="page-ref">📄 见原文第 ${n} 页</span>`);
+  const zh = getConfig().reportLanguage === 'zh';
+  return text.replace(
+    PAGE_REF_RE,
+    (_, n) => `<span class="page-ref">${zh ? `见原文第 ${n} 页` : `Page ${n}`}</span>`,
+  );
 }
 
 function renderRichContent(text, targetEl) {
@@ -619,27 +872,29 @@ function renderRichContent(text, targetEl) {
 /* ---------------- markdown export ---------------- */
 function generateMarkdown(filename, payload) {
   const { result, sectionsUsed, aiSuggested, pageCount, includedPages } = payload;
+  const zh = getConfig().reportLanguage === 'zh';
   const title = filename.replace(/\.pdf$/i, '');
   const now = new Date();
   const stamp = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+  const pageRef = (_, n) => (zh ? `_（见原论文第 ${n} 页）_` : `_(see page ${n} of the paper)_`);
   const lines = [];
   lines.push(`# ${title}`, '');
-  lines.push(`> 原始文件：\`${filename}\`  `);
-  lines.push(`> 总页数：${pageCount}，分析页数：${includedPages}  `);
-  lines.push(`> 生成时间：${stamp}`, '');
+  if (zh) {
+    lines.push(`> 原始文件：\`${filename}\`  `);
+    lines.push(`> 总页数：${pageCount}，分析页数：${includedPages}  `);
+    lines.push(`> 生成时间：${stamp}`, '');
+  } else {
+    lines.push(`> Source file: \`${filename}\`  `);
+    lines.push(`> ${pageCount} pages total, ${includedPages} analysed  `);
+    lines.push(`> Generated: ${stamp}`, '');
+  }
   for (const s of sectionsUsed) {
-    const content = valueToMarkdown(result?.[s.id]).replace(
-      PAGE_REF_RE,
-      (_, n) => `_（见原论文第 ${n} 页）_`,
-    );
+    const content = valueToMarkdown(result?.[s.id]).replace(PAGE_REF_RE, pageRef);
     lines.push(`## ${s.title}`, '', content, '');
   }
   for (const s of aiSuggested || []) {
-    const content = valueToMarkdown(s.content).replace(
-      PAGE_REF_RE,
-      (_, n) => `_（见原论文第 ${n} 页）_`,
-    );
-    lines.push(`## ${s.title} _(AI 生成)_`, '', content, '');
+    const content = valueToMarkdown(s.content).replace(PAGE_REF_RE, pageRef);
+    lines.push(`## ${s.title} ${zh ? '_(AI 生成)_' : '_(AI added)_'}`, '', content, '');
   }
   return lines.join('\n');
 }
@@ -675,15 +930,18 @@ const chatState = {
   onSend: null,
 };
 
-const CHAT_SYSTEM_INSTRUCTION = [
-  '你是一位严谨的学术论文阅读助手。用户已经分析过下方列出的论文，并希望进一步提问。',
-  '请基于这些论文回答用户的问题。回答时遵守：',
-  '1. 优先引用论文中的具体信息（术语、数据、公式、页码），不臆测。若上下文不足以回答，请明确说明。',
-  '2. **数学**：涉及推导/公式时务必使用 LaTeX——行内 `$...$`，独立 `$$...$$`（聊天上下文中 LaTeX 反斜杠无需额外转义）。',
-  '3. **表格**：涉及对比、超参列表、指标对照等结构化信息时，使用 Markdown 表格语法。',
-  '4. **论文中的图/示意图/流程图**：不要尝试嵌入图片。若需引用，用一句话简要描述图的内容，并以「（详见原文第 N 页）」形式注明页码，让用户自行查阅。',
-  '5. 回答可使用 Markdown（标题、列表、加粗等）以提升结构与可读性。',
-].join('\n');
+function chatSystemInstruction() {
+  return [
+    'You are a rigorous academic-paper reading assistant. The user has already analysed the papers listed below and now wants to ask follow-up questions.',
+    'Answer from those papers, and follow these rules:',
+    '1. Prefer concrete evidence from the papers (terminology, numbers, equations, page references) over speculation. If the context does not contain the answer, say so plainly.',
+    '2. **Mathematics**: whenever a derivation or formula is involved, use LaTeX — inline `$...$`, display `$$...$$` (no extra backslash escaping is needed in chat).',
+    '3. **Tables**: use Markdown tables for structured information such as comparisons, hyper-parameter lists and metric breakdowns.',
+    '4. **Figures and diagrams in the papers**: never try to embed an image. Describe the figure in one sentence and cite the page as `(see page N)` so the user can look it up.',
+    '5. Markdown (headings, lists, bold) is welcome where it improves structure and readability.',
+    `6. **Language**: ${reportLanguageDirective(getConfig().reportLanguage)}`,
+  ].join('\n');
+}
 
 export function setChatPapers(papers) {
   chatState.papers = papers || [];
@@ -717,7 +975,7 @@ export function bindChatActions({ onSend }) {
   sendBtn.addEventListener('click', submitChatMessage);
   clearBtn.addEventListener('click', () => {
     if (!chatState.messages.length) return;
-    if (!confirm('确定清空当前对话？')) return;
+    if (!confirm('Clear the current conversation?')) return;
     chatState.messages = [];
     chatState.lastUsage = null;
     renderChatMessages();
@@ -750,7 +1008,7 @@ function renderChatPaperList() {
       <input type="checkbox" data-idx="${idx}" ${chatState.selected.has(idx) ? 'checked' : ''} />
       <div>
         <span class="pp-name">${escapeText(p.filename)}</span>
-        <span class="pp-meta">${p.pageCount} 页 · 已分析 ${p.includedPages} 页</span>
+        <span class="pp-meta">${p.pageCount} pages · ${p.includedPages} analysed</span>
       </div>
     `;
     item.querySelector('input').addEventListener('change', (e) => {
@@ -768,16 +1026,17 @@ function buildContextText() {
     .sort((a, b) => a - b)
     .map((i) => chatState.papers[i])
     .filter(Boolean);
-  if (!selectedPapers.length) return { systemPrompt: CHAT_SYSTEM_INSTRUCTION, images: [] };
-  const parts = [CHAT_SYSTEM_INSTRUCTION, '', '=== 论文资料 ==='];
+  const instruction = chatSystemInstruction();
+  if (!selectedPapers.length) return { systemPrompt: instruction, images: [] };
+  const parts = [instruction, '', '=== Paper material ==='];
   for (let i = 0; i < selectedPapers.length; i++) {
     const p = selectedPapers[i];
-    parts.push(`\n--- 论文 ${i + 1}：${p.filename} ---`);
-    parts.push(`总页数：${p.pageCount}；分析页数：${p.includedPages}`);
+    parts.push(`\n--- Paper ${i + 1}: ${p.filename} ---`);
+    parts.push(`${p.pageCount} pages total, ${p.includedPages} analysed`);
     for (const s of p.sectionsUsed) {
       const v = p.analysis?.[s.id];
       if (v === undefined || v === null || v === '') continue;
-      parts.push(`\n【${s.title}】`);
+      parts.push(`\n[${s.title}]`);
       parts.push(typeof v === 'string' ? v : JSON.stringify(v));
     }
   }
@@ -823,10 +1082,10 @@ function refreshChatMonitor() {
   if (warn) {
     if (est >= limit) {
       warn.hidden = false;
-      warn.textContent = `预估已超出上下文上限 ${(est - limit).toLocaleString()} tokens，请取消勾选部分论文 / 关闭"附带图片" / 调高上限。`;
+      warn.textContent = `Estimated input is ${(est - limit).toLocaleString()} tokens over the context limit. Deselect some papers, turn off page images, or raise the limit.`;
     } else if (est >= limit * 0.85) {
       warn.hidden = false;
-      warn.textContent = '即将达到上下文上限，请注意控制对话长度。';
+      warn.textContent = 'Approaching the context limit — keep an eye on the conversation length.';
     } else {
       warn.hidden = true;
       warn.textContent = '';
@@ -835,7 +1094,7 @@ function refreshChatMonitor() {
   if (lastEl) {
     const u = chatState.lastUsage;
     lastEl.textContent = u
-      ? `${(u.input ?? '?').toLocaleString?.() ?? u.input} 入 / ${(u.output ?? '?').toLocaleString?.() ?? u.output} 出`
+      ? `${(u.input ?? '?').toLocaleString?.() ?? u.input} in / ${(u.output ?? '?').toLocaleString?.() ?? u.output} out`
       : '—';
   }
   if (sendBtn) {
@@ -845,7 +1104,9 @@ function refreshChatMonitor() {
   if (composerHint) {
     const sel = chatState.selected.size;
     composerHint.textContent =
-      sel === 0 ? '请至少选择一篇论文作为上下文' : `已选 ${sel} 篇 · Cmd/Ctrl + Enter 发送`;
+      sel === 0
+        ? 'Select at least one paper as context'
+        : `${sel} paper${sel > 1 ? 's' : ''} selected · Cmd/Ctrl + Enter to send`;
   }
 }
 
@@ -889,7 +1150,7 @@ function appendTypingBubble() {
   const msgs = document.getElementById('chatMessages');
   const wrap = document.createElement('div');
   wrap.className = 'chat-message assistant typing';
-  wrap.innerHTML = '<div class="avatar">AI</div><div class="bubble">思考中…</div>';
+  wrap.innerHTML = '<div class="avatar">AI</div><div class="bubble">Thinking…</div>';
   msgs.appendChild(wrap);
   msgs.scrollTop = msgs.scrollHeight;
   return wrap;
@@ -900,14 +1161,15 @@ function renderChatMessages() {
   if (!msgs) return;
   msgs.innerHTML = '';
   if (!chatState.messages.length) {
-    msgs.innerHTML = '<p class="empty-state">提出你的第一个问题吧（例如：「论文方法的核心公式是什么？请引用论文中的公式」）。</p>';
+    msgs.innerHTML =
+      '<p class="empty-state">Ask your first question — for example, “What is the core equation of the method? Quote it from the paper.”</p>';
     return;
   }
   chatState.messages.forEach((m) => {
     const wrap = document.createElement('div');
     wrap.className = 'chat-message ' + (m.role === 'user' ? 'user' : 'assistant') + (m.error ? ' error' : '');
     wrap.innerHTML = `
-      <div class="avatar">${m.role === 'user' ? '我' : 'AI'}</div>
+      <div class="avatar">${m.role === 'user' ? ICON_USER : 'AI'}</div>
       <div class="bubble"></div>
     `;
     const bubble = wrap.querySelector('.bubble');

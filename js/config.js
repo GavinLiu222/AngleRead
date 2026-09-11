@@ -12,62 +12,77 @@ const DEFAULT_CONFIG = {
   contextLimit: 128000,
   rememberKey: true,
   autoSuggestSections: false,
+  reportLanguage: 'en',
 };
+
+/** 报告输出语言（界面固定英文，模型产出的语言由此项决定） */
+export const REPORT_LANGUAGES = [
+  { value: 'en', label: 'English' },
+  { value: 'zh', label: '中文' },
+];
+
+export function reportLanguageDirective(lang) {
+  if (lang === 'zh') {
+    return 'Write every piece of analysis in Simplified Chinese (简体中文). Keep technical terms, model names, dataset names, metric names and all mathematics in their original form.';
+  }
+  return 'Write every piece of analysis in English, even when the paper itself is written in another language. Keep proper nouns, model names and dataset names in their original form.';
+}
 
 export const DEFAULT_SECTIONS = [
   {
     id: 'argument',
-    title: '研究论点',
+    title: 'Core argument',
     prompt:
-      '系统梳理论文的核心研究问题与中心论点（建议 6-9 句，先给总览再分点展开）。要求：(1) 用一句话精确点明论文试图回答的核心科学问题，并说明它为何重要、难点何在；(2) 提炼作者的中心主张，区分主要论点与支撑性次级论点，并理清二者的逻辑关系（谁支撑谁）；(3) 指出论文赖以成立的关键假设或前提，说明哪些被论文显式验证、哪些是默认成立；(4) 若论文挑战或修正了既有共识，说明其立场与核心依据；(5) 准确使用论文中的关键术语，不要笼统复述摘要。',
+      'Lay out the central research question and thesis of the paper (aim for 6-9 sentences: overview first, then specifics). Requirements: (1) state in one sentence the exact scientific question the paper tries to answer, and why it matters and is hard; (2) distil the authors’ central claim, separating the primary argument from the supporting sub-claims, and make the logical dependency between them explicit; (3) identify the key assumptions or premises the argument rests on, and say which ones the paper verifies explicitly versus takes for granted; (4) if the paper challenges or revises an established consensus, state its position and the core evidence behind it; (5) use the paper’s own terminology precisely instead of paraphrasing the abstract.',
     enabled: true,
   },
   {
     id: 'background',
-    title: '研究背景',
+    title: 'Background & motivation',
     prompt:
-      '分析研究背景与动机（建议 5-7 句）。要求：(1) 概述该问题所属领域的研究现状与主流范式；(2) 具体指出已有方法的局限或尚未解决的痛点，尽量点名代表性工作或方法流派；(3) 说明是什么契机、观察或需求催生了本研究，并交代其学术或产业意义；(4) 解释本研究在该脉络中的定位——补足空白、改进既有还是另辟蹊径；(5) 引用相关文献与领域术语，并区分『论文明确归纳的背景』与『你基于常识的补充』。',
+      'Analyse the research context and motivation (aim for 5-7 sentences). Requirements: (1) summarise the state of the art and the dominant paradigm in this area; (2) name the concrete limitations or unsolved pain points of prior work, citing representative papers or method families where possible; (3) explain what observation, opportunity or demand triggered this work, and its academic or industrial significance; (4) position the work within that lineage — does it fill a gap, improve on prior art, or take an orthogonal route; (5) reference the relevant literature and domain vocabulary, and clearly separate background the paper states explicitly from context you are adding yourself.',
     enabled: true,
   },
   {
     id: 'method',
-    title: '研究方法',
+    title: 'Method',
     prompt:
-      '深入解析论文的方法（最重要的维度，请充分展开）。要求：(1) 自顶向下先讲整体框架或流水线，再拆解关键模块及各自作用，理清模块间的数据流与依赖；(2) 明确输入与输出的形态（数据类型、维度、规模）；(3) 给出核心数学表述——目标函数、损失、关键变换或算法步骤，用 LaTeX 呈现（行内 `$...$`，独立 `$$...$$`），并解释主要符号的含义；(4) 说明关键设计选择及其动机（为什么这样设计、解决了什么问题）；(5) 与已有方法逐点对比，指出算法层面的本质差异而非措辞差异；(6) 若有方法示意图、流程图或伪代码，用 1-2 句描述要点并注明所在页码（如「详见原文第 N 页」），不要尝试嵌入图片。',
+      'Explain the method in depth — this is the most important section, so develop it fully. Requirements: (1) work top-down: describe the overall framework or pipeline first, then decompose it into key modules, their roles, and the data flow and dependencies between them; (2) state the shape of the inputs and outputs (data types, dimensions, scale); (3) give the core mathematical formulation — objective, loss, key transforms or algorithmic steps — in LaTeX (inline `$...$`, display `$$...$$`), and explain what the main symbols mean; (4) explain the critical design choices and their motivation (why it is built this way, what problem each choice solves); (5) compare point by point against prior methods, identifying genuine algorithmic differences rather than differences in wording; (6) if there is an architecture diagram, flow chart or pseudocode, summarise it in 1-2 sentences and cite the page (e.g. “see page N of the paper”) — never try to embed an image.',
     enabled: true,
   },
   {
     id: 'experiment',
-    title: '实验设计',
+    title: 'Experimental setup',
     prompt:
-      '详尽说明实验设置与结果（鼓励使用表格）。要求：(1) 列出数据集名称、规模、划分方式与来源；(2) 给出评价指标的定义与含义，必要时用 LaTeX 写出指标公式；(3) 列明主要对比基线及其代表性；(4) 说明关键实验配置：重要超参数、硬件、训练或推理成本；(5) 用 Markdown 表格呈现核心数值对比（方法 × 指标）并指出最优结果；(6) 概述消融实验验证了哪些组件的有效性；(7) 涉及结果图表时，用一句话总结其结论并注明页码。',
+      'Describe the experimental setup and results in detail (tables encouraged). Requirements: (1) list dataset names, sizes, splits and provenance; (2) define the evaluation metrics and what they measure, writing metric formulas in LaTeX where useful; (3) list the main baselines and why they are representative; (4) report the key experimental configuration: important hyper-parameters, hardware, training or inference cost; (5) present the headline numerical comparison as a Markdown table (method × metric) and point out the best result; (6) summarise which components the ablations validate; (7) when referring to a results figure, state its takeaway in one sentence and cite the page number.',
     enabled: true,
   },
   {
     id: 'conclusion',
-    title: '主要结论',
+    title: 'Key findings',
     prompt:
-      '陈述论文的关键发现与结论，并分清层次。要求：(1) 每条结论都用具体的定量结果（绝对指标、相对提升、百分比）支撑，不空泛；(2) 区分主要发现与次要发现，并按重要性排序；(3) 区分『科学结论』（关于现象或规律的认识）与『工程结论』（关于系统或性能的改进）；(4) 说明这些结论成立所依赖的条件与适用范围，指出其普适性边界；(5) 若结果与既有认知冲突或令人意外，请特别点明。',
+      'State the paper’s key findings and conclusions, with clear hierarchy. Requirements: (1) support every conclusion with concrete quantitative evidence (absolute numbers, relative gains, percentages) rather than vague claims; (2) separate primary from secondary findings and order them by importance; (3) distinguish scientific conclusions (about a phenomenon or a law) from engineering conclusions (about a system or its performance); (4) state the conditions and scope under which these conclusions hold, and where their generality ends; (5) call out explicitly any result that conflicts with prior belief or is otherwise surprising.',
     enabled: true,
   },
   {
     id: 'innovation',
-    title: '创新点',
+    title: 'Novelty & contributions',
     prompt:
-      '用 4-6 条要点列出论文的创新与贡献，按重要性排序。每条要求：(1) 一句话点明创新的实质内容；(2) 明确相对于哪类已有工作或具体方法的差异，说清『新在何处』；(3) 阐述该创新带来的实际收益（性能、效率、可扩展性、可解释性等），尽量用论文数据佐证；(4) 客观区分『真正的方法创新』与『工程实现或增量改良』，不夸大。',
+      'List 4-6 bullet points covering the paper’s novelty and contributions, ordered by importance. For each: (1) state in one sentence what the contribution actually is; (2) name the prior work or method family it differs from, and make clear what is new about it; (3) explain the practical payoff (accuracy, efficiency, scalability, interpretability, …), backed by the paper’s own numbers where possible; (4) honestly separate genuine methodological novelty from engineering work or incremental refinement — do not oversell.',
     enabled: true,
   },
   {
     id: 'limitation',
-    title: '局限性',
+    title: 'Limitations',
     prompt:
-      '用 3-6 条要点客观评估论文的局限，兼顾作者自述与你的独立判断。要求：(1) 先列出作者在文中明确承认的局限；(2) 再指出你观察到、但作者未充分讨论的潜在问题（如假设过强、数据偏差、可复现性、计算成本、泛化性、安全或公平性等），并说明判断依据；(3) 区分『根本性局限』与『可在后续工作中缓解的局限』；(4) 针对每条给出具体、可操作的改进或未来工作建议，避免空话。',
+      'Give 3-6 bullet points assessing the paper’s limitations objectively, covering both what the authors admit and your own independent judgement. Requirements: (1) list first the limitations the authors acknowledge in the text; (2) then raise problems you observe that the authors do not discuss adequately (over-strong assumptions, data bias, reproducibility, compute cost, generalisation, safety or fairness, …), and say what evidence leads you there; (3) separate fundamental limitations from ones that follow-up work could plausibly fix; (4) attach a concrete, actionable suggestion for improvement or future work to each point — avoid platitudes.',
     enabled: true,
   },
   {
     id: 'tldr',
-    title: '一句话总结',
-    prompt: '用一句不超过 50 字的中文高度概括全文，须同时点出三要素：研究解决的问题、采用的核心方法、最关键的结论或贡献。确保读完即知论文做了什么、好在哪里，避免泛泛而谈。',
+    title: 'One-line summary',
+    prompt:
+      'Summarise the whole paper in a single sentence of at most 50 words that names all three of: the problem addressed, the core method used, and the most important result or contribution. A reader should finish it knowing what the paper did and why it matters. Avoid generalities.',
     enabled: true,
   },
 ];
@@ -100,7 +115,7 @@ export function setConfig(patch) {
 
 export function isConfigReady() {
   const cfg = getConfig();
-  // 本地 Ollama 无需 API Key
+  // Local Ollama needs no API key
   if (cfg.apiFormat === 'ollama') return Boolean(cfg.apiUrl && cfg.model);
   return Boolean(cfg.apiUrl && cfg.apiKey && cfg.model);
 }
@@ -153,7 +168,7 @@ export function profileSignature(p) {
 }
 
 function defaultProfileName({ apiFormat, apiUrl, model }) {
-  const m = model || '未命名模型';
+  const m = model || 'Unnamed model';
   if (apiFormat === 'ollama') return `${m} · Ollama`;
   let host = apiUrl || '';
   try {

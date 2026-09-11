@@ -53,17 +53,21 @@ async function startAnalysis(files) {
   switchView('results');
   initResultsView(state.lastFiles);
   await analyzeAll(state.lastFiles, {
-    onItemStart: (idx) => setItemStatus(idx, 'processing', '准备中…'),
+    onItemStart: (idx) => setItemStatus(idx, 'processing', 'Preparing…'),
     onProgressItem: (idx, info) => {
       if (info.stage === 'pdf-rendering') {
-        setItemStatus(idx, 'processing', `渲染 PDF 第 ${info.page}/${info.total} 页…`);
+        setItemStatus(idx, 'processing', `Rendering page ${info.page} of ${info.total}…`);
       } else if (info.stage === 'llm-calling') {
         const tail = info.estimatedTokens
-          ? `（预估 ${info.estimatedTokens.toLocaleString()} tokens）`
+          ? ` (about ${info.estimatedTokens.toLocaleString()} tokens)`
           : '';
-        setItemStatus(idx, 'processing', `已渲染 ${info.includedPages}/${info.pageCount} 页，正在请求模型${tail}…`);
+        setItemStatus(
+          idx,
+          'processing',
+          `Rendered ${info.includedPages}/${info.pageCount} pages — querying the model${tail}…`,
+        );
       } else if (info.stage === 'pdf-loading') {
-        setItemStatus(idx, 'processing', '加载 PDF…');
+        setItemStatus(idx, 'processing', 'Loading PDF…');
       }
     },
     onItemDone: (idx, payload) => {
@@ -80,23 +84,27 @@ async function startAnalysis(files) {
       updateProgress(state.doneCount, state.lastFiles.length);
     },
   });
-  toast('全部分析任务已完成', 'success');
+  toast('All analyses finished', 'success');
 }
 
 async function retryItem(idx) {
   const file = state.lastFiles[idx];
   if (!file) return;
-  setItemStatus(idx, 'processing', '重试中…');
+  setItemStatus(idx, 'processing', 'Retrying…');
   try {
     const payload = await analyzeOne(file, {
       onProgress: (info) => {
         if (info.stage === 'pdf-rendering') {
-          setItemStatus(idx, 'processing', `渲染 PDF 第 ${info.page}/${info.total} 页…`);
+          setItemStatus(idx, 'processing', `Rendering page ${info.page} of ${info.total}…`);
         } else if (info.stage === 'llm-calling') {
           const tail = info.estimatedTokens
-            ? `（预估 ${info.estimatedTokens.toLocaleString()} tokens）`
+            ? ` (about ${info.estimatedTokens.toLocaleString()} tokens)`
             : '';
-          setItemStatus(idx, 'processing', `已渲染 ${info.includedPages}/${info.pageCount} 页，正在请求模型${tail}…`);
+          setItemStatus(
+            idx,
+            'processing',
+            `Rendered ${info.includedPages}/${info.pageCount} pages — querying the model${tail}…`,
+          );
         }
       },
     });
@@ -112,7 +120,7 @@ async function retryItem(idx) {
 async function handleChatSend({ systemPrompt, turns }) {
   const cfg = getConfig();
   if (!isConfigReady()) {
-    throw new Error('请先在「设置」中完成 API 配置');
+    throw new Error('Finish the API configuration in Settings first.');
   }
   return chatLLM(cfg, systemPrompt, turns);
 }
@@ -127,7 +135,7 @@ function boot() {
     files: state.files,
     onAnalyze: (files) => {
       if (!isConfigReady()) {
-        toast('请先完成 API 设置', 'error');
+        toast('Finish the API configuration first', 'error');
         switchView('settings');
         return;
       }
