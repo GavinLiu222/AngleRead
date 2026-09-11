@@ -1,28 +1,25 @@
-/* 纯表现层：滚动入场编排、导航岛屿展开、CTA 磁吸微交互。
+/* 纯表现层：滚动入场编排、侧栏抽屉、可关闭的提示条。
    不参与任何业务逻辑，移除本文件也不影响应用功能。 */
 
 const root = document.documentElement;
 const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-const fine = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches;
 
 /* ---------------- 滚动入场（IntersectionObserver，绝不监听 scroll） ---------------- */
 
 const REVEAL_SELECTOR = [
   '.view-head',
-  '.profile-bar',
-  '.form-grid',
-  '.auto-suggest-row',
-  '.section-item',
-  '.section-editor + .actions',
-  '.sticky-actions',
+  '.notice',
+  '.stat-grid',
+  '.panel',
   '.dropzone',
   '.file-item',
+  '.results-toolbar',
   '.paper-card',
   '.chat-empty',
   '.chat-container',
   '.results-list > .empty-state',
-  '.view > h3',
-  '.view > h3 + .hint',
+  '.sticky-actions',
+  '.view > .actions',
 ].join(',');
 
 if ('IntersectionObserver' in window && !reduced) {
@@ -84,7 +81,7 @@ if ('IntersectionObserver' in window && !reduced) {
   });
 }
 
-/* ---------------- 流体导航岛屿（窄屏汉堡 → 全屏玻璃层） ---------------- */
+/* ---------------- 侧栏：窄屏抽屉 ---------------- */
 
 const navToggle = document.getElementById('navToggle');
 const tabs = document.getElementById('tabs');
@@ -103,64 +100,62 @@ tabs?.addEventListener('click', (e) => {
   if (e.target.closest('.tab')) setNav(false);
 });
 
+document.querySelector('[data-dismiss="nav"]')?.addEventListener('click', () => setNav(false));
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') setNav(false);
 });
 
-window.matchMedia('(min-width: 768px)').addEventListener?.('change', (e) => {
+window.matchMedia('(min-width: 901px)').addEventListener?.('change', (e) => {
   if (e.matches) setNav(false);
 });
 
-/* ---------------- CTA 磁吸物理（仅精确指针；写入自定义属性，由 CSS 合成 transform） ---------------- */
+// 侧栏底部的连接状态块 → Settings
+document.getElementById('connStatus')?.addEventListener('click', () => {
+  document.querySelector('.tab[data-view="settings"]')?.click();
+});
 
-if (fine && !reduced) {
-  const SELECTOR = 'button.primary:not(:disabled), button.ghost:not(:disabled), .tab';
-  const MAX_X = 4;
-  const MAX_Y = 2.4;
+/* ---------------- 可关闭的提示条（关闭状态记在本机） ---------------- */
 
-  let target = null;
-  let pointer = null;
-  let frame = 0;
+const DISMISS_KEY = 'thesisReader.dismissedNotices';
 
-  const release = (el) => {
-    if (!el) return;
-    el.style.removeProperty('--mx');
-    el.style.removeProperty('--my');
-  };
-
-  // 每帧至多一次读 + 一次写，且仅在指针停留于按钮上时运行
-  const apply = () => {
-    frame = 0;
-    if (!target || !pointer) return;
-    const r = target.getBoundingClientRect();
-    if (!r.width || !r.height) return;
-    const dx = ((pointer.x - (r.left + r.width / 2)) / (r.width / 2)) * MAX_X;
-    const dy = ((pointer.y - (r.top + r.height / 2)) / (r.height / 2)) * MAX_Y;
-    target.style.setProperty('--mx', dx.toFixed(2) + 'px');
-    target.style.setProperty('--my', dy.toFixed(2) + 'px');
-  };
-
-  const drop = () => {
-    release(target);
-    target = null;
-    pointer = null;
-  };
-
-  document.addEventListener('pointerover', (e) => {
-    const el = e.target.closest?.(SELECTOR) || null;
-    if (el === target) return;
-    release(target);
-    target = el;
-  });
-
-  document.addEventListener('pointermove', (e) => {
-    if (!target) return;
-    pointer = { x: e.clientX, y: e.clientY };
-    if (!frame) frame = requestAnimationFrame(apply);
-  });
-
-  document.addEventListener('pointerout', (e) => {
-    if (target && !target.contains(e.relatedTarget)) drop();
-  });
-  window.addEventListener('blur', drop);
+function readDismissed() {
+  try {
+    const raw = localStorage.getItem(DISMISS_KEY);
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch {
+    return new Set();
+  }
 }
+
+function writeDismissed(set) {
+  try {
+    localStorage.setItem(DISMISS_KEY, JSON.stringify([...set]));
+  } catch {
+    /* 隐私模式下写入失败无所谓，本次会话内关闭即可 */
+  }
+}
+
+const dismissed = readDismissed();
+
+function noticeKey(el) {
+  return el.id || el.dataset.notice || '';
+}
+
+for (const el of document.querySelectorAll('.announce, .notice')) {
+  const key = noticeKey(el);
+  if (key && dismissed.has(key)) el.hidden = true;
+}
+
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-dismiss="announce"], [data-dismiss="notice"]');
+  if (!btn) return;
+  const box = btn.closest('.announce, .notice');
+  if (!box) return;
+  box.hidden = true;
+  const key = noticeKey(box);
+  if (key) {
+    dismissed.add(key);
+    writeDismissed(dismissed);
+  }
+});

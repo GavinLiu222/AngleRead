@@ -6,6 +6,14 @@
 
 直接用浏览器打开 `index.html` 即可使用（建议通过本地静态服务器访问，例如 `python3 -m http.server`，以避免部分浏览器对 `file://` 加载 ES Module 的限制）。
 
+## 界面布局
+
+控制台式布局：**左侧固定导航栏**（品牌 → Upload / Results / Chat / Settings → 文档链接、快捷键、当前模型连接状态）+ **右侧独立滚动的文档列**，正文宽度限制在 1024px。窄屏（≤900px）下导航栏收成抽屉，由顶栏的汉堡按钮唤出。
+
+页面最顶部是一条**彩色提示条**，同时通过 `<meta name="theme-color">` 把浏览器地址栏染成同色（浅色 `#DCEEFB` / 深色 `#13283A`）。提示条与设置页的蓝色提示卡都可以点掉，关闭状态记在 `localStorage` 的 `thesisReader.dismissedNotices`。
+
+视觉上是暖色单色调：**全站只用一套无衬线字体**（macOS 上是系统的 SF Pro，其他平台回落到 Geist），标题、数字、标签、徽章一视同仁；等宽字体（Geist Mono）只留给真正的代码——`<code>` / `<pre>` / 快捷键 `<kbd>`。分隔线统一 1px，强调色只用低饱和的淡蓝 / 淡红 / 淡绿 / 淡黄 / 淡紫。跟随系统深浅色。
+
 ## 大模型配置
 
 所有配置都保存在浏览器本机 `localStorage`，不会上传。设置页支持三种接口格式：
@@ -66,12 +74,12 @@ OLLAMA_ORIGINS=* ollama serve
 
 | 文件 | 职责 |
 | --- | --- |
-| [index.html](index.html) | 页面骨架与各视图（Settings / Upload / Results / Chat） |
+| [index.html](index.html) | 页面骨架：彩色提示条、左侧导航栏与各视图（Settings / Upload / Results / Chat） |
 | [js/config.js](js/config.js) | 配置、配置档案与默认分析维度的 `localStorage` 存取；报告语言指令 |
 | [js/presets.js](js/presets.js) | 主流服务商 API 地址与多模态模型的预置清单 |
 | [js/llmClient.js](js/llmClient.js) | LLM 调用（OpenAI / Anthropic / Ollama）、端点解析、模型列表拉取、token 估算 |
 | [js/pdfProcessor.js](js/pdfProcessor.js) | 用 pdf.js 把 PDF 渲染为逐页图片 |
 | [js/analyzer.js](js/analyzer.js) | 组装 prompt、并发分析、解析模型 JSON 输出 |
 | [js/ui.js](js/ui.js) | 各视图渲染、事件绑定与预置下拉框 |
-| [js/motion.js](js/motion.js) | 纯表现层：滚动入场编排、导航展开、按钮磁吸微交互（移除不影响功能） |
+| [js/motion.js](js/motion.js) | 纯表现层：滚动入场编排、窄屏导航抽屉、提示条关闭与记忆（移除不影响功能） |
 | [js/main.js](js/main.js) | 启动与模块装配 |

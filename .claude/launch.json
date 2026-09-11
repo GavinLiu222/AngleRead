@@ -4,8 +4,9 @@
     {
       "name": "thesisreader",
       "runtimeExecutable": "python3",
-      "runtimeArgs": [".claude/serve.py", "4173"],
-      "port": 4173
+      "runtimeArgs": [".claude/serve.py"],
+      "port": 4173,
+      "autoPort": true
     }
   ]
 }

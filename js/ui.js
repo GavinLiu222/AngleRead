@@ -11,6 +11,7 @@ import {
   rememberProfile,
   profileSignature,
   reportLanguageDirective,
+  isConfigReady,
 } from './config.js';
 import { estimateChatTokens, estimateTextTokens, fetchModelList } from './llmClient.js';
 import { API_PRESETS, MODEL_PRESETS, guessProviderKey } from './presets.js';
@@ -18,11 +19,11 @@ import { API_PRESETS, MODEL_PRESETS, guessProviderKey } from './presets.js';
 const VIEWS = ['settings', 'upload', 'results', 'chat'];
 
 const ICON_DOC =
-  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.4H7.6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h8.8a2 2 0 0 0 2-2V8.2Z"/><path d="M14 3.4V8.2h4.4"/><path d="M8.9 13h6.2M8.9 16.3h4"/></svg>';
+  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.4H7.6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h8.8a2 2 0 0 0 2-2V8.2Z"/><path d="M14 3.4V8.2h4.4"/><path d="M8.9 13h6.2M8.9 16.3h4"/></svg>';
 const ICON_DOWNLOAD =
-  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.4v10"/><path d="m7.9 10.6 4.1 4.1 4.1-4.1"/><path d="M5.2 19.4h13.6"/></svg>';
+  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.4v10"/><path d="m7.9 10.6 4.1 4.1 4.1-4.1"/><path d="M5.2 19.4h13.6"/></svg>';
 const ICON_USER =
-  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8.6" r="3.5"/><path d="M5.2 19.6a6.8 6.8 0 0 1 13.6 0"/></svg>';
+  '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8.6" r="3.5"/><path d="M5.2 19.6a6.8 6.8 0 0 1 13.6 0"/></svg>';
 
 export function switchView(name) {
   if (!VIEWS.includes(name)) return;
@@ -32,6 +33,36 @@ export function switchView(name) {
   }
   for (const tab of document.querySelectorAll('.tab')) {
     tab.classList.toggle('active', tab.dataset.view === name);
+  }
+  // 文档列是独立滚动容器，换视图时回到顶部
+  document.getElementById('content')?.scrollTo({ top: 0 });
+}
+
+/* ---------------- rail status block ---------------- */
+export function renderConnectionStatus() {
+  const box = document.getElementById('connStatus');
+  if (!box) return;
+  const cfg = getConfig();
+  const ready = isConfigReady();
+  const modelEl = box.querySelector('[data-role="model"]');
+  const hostEl = box.querySelector('[data-role="host"]');
+  box.classList.toggle('ready', ready);
+  if (modelEl) modelEl.textContent = ready ? cfg.model : 'Not configured';
+  if (hostEl) {
+    hostEl.textContent = ready
+      ? `${apiHost(cfg.apiUrl)} · ${cfg.apiFormat}`
+      : 'Open Settings to connect a model';
+  }
+  box.title = ready ? `${cfg.model} — ${cfg.apiUrl}` : 'No model configured yet';
+}
+
+function apiHost(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return 'no endpoint';
+  try {
+    return new URL(raw.includes('://') ? raw : 'https://' + raw).host;
+  } catch {
+    return raw.replace(/^https?:\/\//, '').split('/')[0];
   }
 }
 
@@ -66,6 +97,7 @@ export function renderSettings() {
   updateProviderUI();
   renderModelChips([]);
   renderSectionEditor();
+  renderConnectionStatus();
 }
 
 /* ---------------- model config profiles ---------------- */
@@ -425,6 +457,7 @@ export function bindSettingsActions({ onSaved }) {
       contextLimit: p.contextLimit || cfg.contextLimit,
     });
     document.getElementById('deleteProfileBtn').disabled = false;
+    renderConnectionStatus();
     toast(`Switched to “${p.name}”`, 'success');
   });
 
@@ -528,6 +561,7 @@ export function bindSettingsActions({ onSaved }) {
     });
     rememberProfile(next);
     renderProfiles();
+    renderConnectionStatus();
     toast('Configuration saved', 'success');
     onSaved?.();
   });
@@ -564,6 +598,7 @@ export function bindUploadActions({ files, onAnalyze }) {
   const clearBtn = document.getElementById('clearFilesBtn');
 
   const refresh = () => renderFileList(files, refresh);
+  renderUploadStats(files);
 
   browseBtn.addEventListener('click', () => fileInput.click());
   dropzone.addEventListener('click', (e) => {
@@ -636,6 +671,21 @@ function renderFileList(files, refresh) {
 function updateUploadButtons(files) {
   document.getElementById('analyzeBtn').disabled = files.length === 0;
   document.getElementById('clearFilesBtn').disabled = files.length === 0;
+  renderUploadStats(files);
+}
+
+function renderUploadStats(files) {
+  const box = document.getElementById('uploadStats');
+  if (!box) return;
+  const bytes = files.reduce((sum, f) => sum + (f.size || 0), 0);
+  const cap = getConfig().maxPages;
+  const set = (role, value) => {
+    const el = box.querySelector(`[data-role="${role}"]`);
+    if (el) el.textContent = value;
+  };
+  set('files', String(files.length));
+  set('size', (bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1));
+  set('cap', cap > 0 ? String(cap) : 'All');
 }
 
 function escapeText(s) {
@@ -651,7 +701,40 @@ function formatSize(bytes) {
 }
 
 /* ---------------- results view ---------------- */
+const resultTotals = { papers: 0, expected: 0, pages: 0, tokensIn: 0, tokensOut: 0, counted: new Set() };
+
+function renderResultStats() {
+  const box = document.getElementById('resultStats');
+  if (!box) return;
+  const set = (role, value) => {
+    const el = box.querySelector(`[data-role="${role}"]`);
+    if (el) el.textContent = value;
+  };
+  const unit = (role, value) => {
+    const el = box.querySelector(`[data-role="${role}"]`)?.nextElementSibling;
+    if (el) el.textContent = value;
+  };
+  set('papers', String(resultTotals.papers));
+  unit('papers', `of ${resultTotals.expected}`);
+  set('pages', resultTotals.pages.toLocaleString());
+  const tokens = resultTotals.tokensIn + resultTotals.tokensOut;
+  set('tokens', tokens >= 10000 ? `${Math.round(tokens / 1000)}k` : tokens.toLocaleString());
+  unit(
+    'tokens',
+    tokens
+      ? `${resultTotals.tokensIn.toLocaleString()} in / ${resultTotals.tokensOut.toLocaleString()} out`
+      : 'in / out',
+  );
+}
+
 export function initResultsView(files) {
+  resultTotals.papers = 0;
+  resultTotals.expected = files.length;
+  resultTotals.counted.clear();
+  resultTotals.pages = 0;
+  resultTotals.tokensIn = 0;
+  resultTotals.tokensOut = 0;
+  renderResultStats();
   const list = document.getElementById('resultsList');
   list.innerHTML = '';
   files.forEach((f, idx) => {
@@ -667,7 +750,7 @@ export function initResultsView(files) {
         <div class="right">
           <button class="export-btn" data-role="export" title="Export as Markdown" hidden>${ICON_DOWNLOAD}Markdown</button>
           <span class="badge pending" data-role="badge">Queued</span>
-          <span class="toggle">▼</span>
+          <span class="toggle" aria-hidden="true"></span>
         </div>
       </div>
       <div class="paper-card-body" data-role="body">
@@ -789,6 +872,14 @@ export function renderItemResult(idx, payload, onRetry) {
     renderRichContent(valueToMarkdown(s.content), contentEl);
     body.appendChild(block);
   });
+  if (!resultTotals.counted.has(idx)) {
+    resultTotals.counted.add(idx);
+    resultTotals.papers += 1;
+    resultTotals.pages += includedPages || 0;
+    resultTotals.tokensIn += usage?.input ?? estimatedTokens ?? 0;
+    resultTotals.tokensOut += usage?.output ?? 0;
+    renderResultStats();
+  }
   setItemStatus(idx, 'done');
   bindRetry(card, onRetry, idx, false);
 }

@@ -4,10 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="color-scheme" content="light dark" />
+  <!-- tints the browser URL bar to match the top strip -->
+  <meta name="theme-color" content="#DCEEFB" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#13283A" media="(prefers-color-scheme: dark)" />
   <title>ThesisReader — Academic paper reading assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" />
   <link rel="stylesheet" href="css/style.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
   <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
@@ -16,36 +19,105 @@
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 </head>
 <body>
-  <header class="app-header">
-    <div class="header-inner">
-      <div class="brand">
-        <span class="logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 6.6C10.4 5.2 8.4 4.6 5.6 4.6a1 1 0 0 0-1 1v11.2a1 1 0 0 0 1 1c2.8 0 4.8.6 6.4 2 1.6-1.4 3.6-2 6.4-2a1 1 0 0 0 1-1V5.6a1 1 0 0 0-1-1c-2.8 0-4.8.6-6.4 2Z" />
-            <path d="M12 6.6v12.2" />
-          </svg>
-        </span>
-        <span class="brand-text">
-          <h1>ThesisReader</h1>
-          <span class="tagline">Read papers faster</span>
-        </span>
-      </div>
-
-      <button class="nav-toggle" id="navToggle" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="tabs">
-        <span class="bar"></span>
-        <span class="bar"></span>
+  <!-- colour strip: also the source of the browser URL-bar tint -->
+  <div class="announce" id="announce">
+    <div class="announce-inner">
+      <span class="announce-tag">Local first</span>
+      <p class="announce-text">
+        API keys and settings stay in this browser's local storage. Page images are sent only to the model endpoint you configure.
+      </p>
+      <a class="announce-link" href="README.md" target="_blank" rel="noreferrer">Setup notes</a>
+      <button type="button" class="announce-close" data-dismiss="announce" aria-label="Dismiss notice">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M6.4 6.4 17.6 17.6M17.6 6.4 6.4 17.6" /></svg>
       </button>
-
-      <nav class="tabs" id="tabs">
-        <button class="tab" data-view="settings">Settings</button>
-        <button class="tab" data-view="upload">Upload</button>
-        <button class="tab" data-view="results">Results</button>
-        <button class="tab" data-view="chat">Chat</button>
-      </nav>
     </div>
-  </header>
+  </div>
 
-  <main class="app-main">
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-inner">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 6.8C10.5 5.4 8.6 4.8 5.9 4.8a1 1 0 0 0-1 1v10.9a1 1 0 0 0 1 1c2.7 0 4.6.6 6.1 2 1.5-1.4 3.4-2 6.1-2a1 1 0 0 0 1-1V5.8a1 1 0 0 0-1-1c-2.7 0-4.6.6-6.1 2Z" />
+              <path d="M12 6.8v12.9" />
+            </svg>
+          </span>
+          <span class="brand-text">ThesisReader</span>
+          <span class="brand-chip">Reader</span>
+        </div>
+
+        <nav class="side-nav" id="tabs" aria-label="Views">
+          <button class="tab" type="button" data-view="settings">
+            <span class="tab-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4.8 8.2h14.4M4.8 15.8h14.4" /><circle cx="9.6" cy="8.2" r="2.1" /><circle cx="14.8" cy="15.8" r="2.1" />
+              </svg>
+            </span>
+            <span>Settings</span>
+          </button>
+          <button class="tab" type="button" data-view="upload">
+            <span class="tab-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 15.4V4.6" /><path d="m7.9 8.5 4.1-4 4.1 4" /><path d="M4.6 14.6v3.2a1.8 1.8 0 0 0 1.8 1.8h11.2a1.8 1.8 0 0 0 1.8-1.8v-3.2" />
+              </svg>
+            </span>
+            <span>Upload</span>
+          </button>
+          <button class="tab" type="button" data-view="results">
+            <span class="tab-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4.6" y="4.6" width="14.8" height="14.8" rx="2.2" /><path d="M8.6 15.4v-3.2M12 15.4V8.6M15.4 15.4v-1.9" />
+              </svg>
+            </span>
+            <span>Results</span>
+          </button>
+          <button class="tab" type="button" data-view="chat">
+            <span class="tab-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19.4 12.4c0 3.5-3.3 6.3-7.4 6.3a8.7 8.7 0 0 1-2.4-.3l-4.2 1.2 1.3-3.5a5.9 5.9 0 0 1-1.7-4c0-3.5 3.3-6.3 7.4-6.3s7 2.8 7 6.6Z" />
+              </svg>
+            </span>
+            <span>Chat</span>
+          </button>
+        </nav>
+
+        <div class="side-foot">
+          <a class="side-link" href="README.md" target="_blank" rel="noreferrer">
+            <span class="tab-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14.2 4.4H7.8a2 2 0 0 0-2 2v11.2a2 2 0 0 0 2 2h8.4a2 2 0 0 0 2-2V8.6Z" /><path d="M14.2 4.4v4.2h4" /><path d="M9.2 13.2h5.6M9.2 16h3.6" />
+              </svg>
+            </span>
+            <span>Documentation</span>
+          </a>
+
+          <div class="side-keys">
+            <span>Send message</span>
+            <span class="keys"><kbd>⌘</kbd><kbd>↵</kbd></span>
+          </div>
+
+          <button type="button" class="side-status" id="connStatus">
+            <span class="status-dot" data-role="dot" aria-hidden="true"></span>
+            <span class="status-text">
+              <strong data-role="model">Not configured</strong>
+              <small data-role="host">Open Settings to connect a model</small>
+            </span>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="content" id="content">
+      <header class="topbar">
+        <button class="nav-toggle" id="navToggle" type="button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="sidebar">
+          <span class="bar"></span>
+          <span class="bar"></span>
+        </button>
+        <span class="topbar-brand">ThesisReader</span>
+      </header>
+
+      <main class="app-main">
     <!-- Settings -->
     <section class="view" id="view-settings" hidden>
       <div class="view-head">
@@ -54,24 +126,37 @@
         <p class="hint">Works with third-party cloud models and with a local Ollama. Your API key is stored only in this browser.</p>
       </div>
 
-      <div class="profile-bar">
-        <label class="profile-select-row">
-          <span>Saved profiles</span>
-          <select id="profileSelect">
-            <option value="">— Select a saved profile —</option>
-          </select>
-          <button type="button" class="ghost" id="deleteProfileBtn" disabled>Delete</button>
-        </label>
-        <p class="hint small profile-hint">Every save is recorded here, so you can switch back to any model you have used before.</p>
+      <div class="notice notice-blue" data-notice="vision">
+        <p>Every page is rendered to an image before it reaches the model, so the model has to accept image input. Text-only models return empty sections. The model picker lists vision-capable models grouped by provider.</p>
+        <button type="button" class="notice-ok" data-dismiss="notice">Got it</button>
       </div>
 
-      <div class="form-grid">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="panel-eyebrow">Connection</span>
+            <h3>Endpoint and model</h3>
+          </div>
+        </div>
+
+        <div class="profile-bar">
+          <label class="profile-select-row">
+            <span>Saved profiles</span>
+            <select id="profileSelect">
+              <option value="">— Select a saved profile —</option>
+            </select>
+            <button type="button" class="ghost" id="deleteProfileBtn" disabled>Delete</button>
+          </label>
+          <p class="hint small profile-hint">Every save is recorded here, so you can switch back to any model you have used before.</p>
+        </div>
+
+        <div class="form-grid">
         <label class="form-row span-12">
           <span>API URL</span>
           <div class="combo" data-combo="api">
             <input type="text" id="apiUrl" placeholder="https://api.openai.com" autocomplete="off" spellcheck="false" />
             <button type="button" class="combo-toggle" data-combo-toggle aria-label="Browse providers" aria-expanded="false" tabindex="-1">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9.5 6 5.5 6-5.5" /></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6.5 9.8 5.5 5 5.5-5" /></svg>
             </button>
             <div class="combo-menu" data-combo-menu role="listbox" hidden></div>
           </div>
@@ -85,7 +170,7 @@
           </div>
         </label>
 
-        <label class="form-row span-6">
+        <label class="form-row span-5">
           <span>Interface format</span>
           <select id="apiFormat">
             <option value="openai">OpenAI-compatible (/v1/chat/completions)</option>
@@ -94,13 +179,13 @@
           </select>
         </label>
 
-        <label class="form-row span-6">
+        <label class="form-row span-7">
           <span>Model</span>
           <div class="input-with-action">
             <div class="combo" data-combo="model">
               <input type="text" id="modelName" placeholder="gpt-4o / claude-sonnet-5 / llava" autocomplete="off" spellcheck="false" />
               <button type="button" class="combo-toggle" data-combo-toggle aria-label="Browse multimodal models" aria-expanded="false" tabindex="-1">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9.5 6 5.5 6-5.5" /></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6.5 9.8 5.5 5 5.5-5" /></svg>
               </button>
               <div class="combo-menu" data-combo-menu role="listbox" hidden></div>
             </div>
@@ -146,22 +231,30 @@
           <input type="checkbox" id="rememberKey" checked />
           <span>Remember the API key in this browser (turn off and it is cleared on reload)</span>
         </label>
-      </div>
+        </div>
+      </section>
 
-      <h3>Analysis sections</h3>
-      <p class="hint">Enable, disable, edit, add or remove the sections you want the model to produce.</p>
-      <label class="auto-suggest-row">
-        <input type="checkbox" id="autoSuggestSections" />
-        <span>Let the model propose extra sections: after reading the paper it suggests angles you are likely to care about that the sections below do not cover. They appear in the results with a violet heading marked “AI added”.</span>
-      </label>
-      <div id="sectionEditor" class="section-editor"></div>
-      <div class="actions">
-        <button class="ghost" id="addSectionBtn">+ Add section</button>
-        <button class="ghost" id="resetSectionsBtn">Restore defaults</button>
-      </div>
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="panel-eyebrow">Reading template</span>
+            <h3>Analysis sections</h3>
+          </div>
+          <div class="panel-actions">
+            <button class="ghost" id="addSectionBtn">Add section</button>
+            <button class="ghost" id="resetSectionsBtn">Restore defaults</button>
+          </div>
+        </div>
+        <p class="hint">Enable, disable, edit, add or remove the sections you want the model to produce.</p>
+        <label class="auto-suggest-row">
+          <input type="checkbox" id="autoSuggestSections" />
+          <span>Let the model propose extra sections: after reading the paper it suggests angles you are likely to care about that the sections below do not cover. They appear in the results with a violet heading marked “AI added”.</span>
+        </label>
+        <div id="sectionEditor" class="section-editor"></div>
+      </section>
 
       <div class="actions sticky-actions">
-        <button class="primary" id="saveConfigBtn">Save configuration<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8 9.4 17 19 7.4" /></svg></span></button>
+        <button class="primary" id="saveConfigBtn">Save configuration<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8 9.4 17 19 7.4" /></svg></span></button>
         <button class="danger" id="clearStorageBtn">Clear all storage</button>
       </div>
     </section>
@@ -174,10 +267,28 @@
         <p class="hint">Add as many PDFs as you like — they are analysed in parallel.</p>
       </div>
 
+      <div class="stat-grid" id="uploadStats">
+        <div class="stat">
+          <span class="stat-label">Queued</span>
+          <strong class="stat-value" data-role="files">0</strong>
+          <span class="stat-unit">files</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Combined size</span>
+          <strong class="stat-value" data-role="size">0</strong>
+          <span class="stat-unit">MB</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Page cap per paper</span>
+          <strong class="stat-value" data-role="cap">All</strong>
+          <span class="stat-unit">pages</span>
+        </div>
+      </div>
+
       <div id="dropzone" class="dropzone">
         <input type="file" id="fileInput" accept="application/pdf" multiple hidden />
         <span class="dz-glyph" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 15.5V4.2" />
             <path d="m7.6 8.6 4.4-4.4 4.4 4.4" />
             <path d="M4.2 14.4v3.4a2 2 0 0 0 2 2h11.6a2 2 0 0 0 2-2v-3.4" />
@@ -190,7 +301,7 @@
       <div id="fileList" class="file-list"></div>
 
       <div class="actions">
-        <button class="primary" id="analyzeBtn" disabled>Start analysis<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13.5M13 6.2l6 5.8-6 5.8" /></svg></span></button>
+        <button class="primary" id="analyzeBtn" disabled>Start analysis<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13.5M13 6.2l6 5.8-6 5.8" /></svg></span></button>
         <button class="ghost" id="clearFilesBtn" disabled>Clear list</button>
       </div>
     </section>
@@ -242,7 +353,7 @@
             <textarea id="chatInput" rows="3" placeholder="Press Cmd/Ctrl + Enter to send"></textarea>
             <div class="composer-actions">
               <span class="composer-hint" id="composerHint"></span>
-              <button class="primary" id="chatSendBtn" disabled>Send<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5.4M6.2 11 12 5.2 17.8 11" /></svg></span></button>
+              <button class="primary" id="chatSendBtn" disabled>Send<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5.4M6.2 11 12 5.2 17.8 11" /></svg></span></button>
             </div>
           </div>
         </div>
@@ -251,22 +362,45 @@
 
     <!-- Results -->
     <section class="view" id="view-results" hidden>
-      <div class="results-header">
-        <div class="view-head">
-          <span class="eyebrow">Results</span>
-          <h2>Analysis results</h2>
+      <div class="view-head">
+        <span class="eyebrow">Results</span>
+        <h2>Analysis results</h2>
+        <p class="hint">Each card holds one paper's structured reading. Export any of them as Markdown.</p>
+      </div>
+
+      <div class="results-toolbar">
+        <div class="stat-grid" id="resultStats">
+          <div class="stat">
+            <span class="stat-label">Papers read</span>
+            <strong class="stat-value" data-role="papers">0</strong>
+            <span class="stat-unit">of 0</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Pages analysed</span>
+            <strong class="stat-value" data-role="pages">0</strong>
+            <span class="stat-unit">pages</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Tokens</span>
+            <strong class="stat-value" data-role="tokens">0</strong>
+            <span class="stat-unit">in / out</span>
+          </div>
         </div>
         <div class="progress" id="progress" hidden>
           <span id="progressText">0 / 0</span>
           <div class="progress-bar"><div class="progress-bar-fill" id="progressFill"></div></div>
         </div>
       </div>
+
       <div id="resultsList" class="results-list">
         <p class="empty-state">Nothing analysed yet. Head to the Upload view to pick your papers.</p>
       </div>
     </section>
-  </main>
+      </main>
+    </div>
+  </div>
 
+  <div class="scrim" data-dismiss="nav" aria-hidden="true"></div>
   <div id="toast" class="toast" hidden></div>
 
   <script type="module" src="js/main.js"></script>
