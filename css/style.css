@@ -400,6 +400,23 @@ code, kbd, samp, pre { font-family: var(--font-mono); }
   transition: background 160ms var(--ease-out), color 160ms var(--ease-out);
 }
 
+button.side-link {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button.side-link.active {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+button.side-link.active .tab-ico { color: var(--ink); }
+
 .side-link:hover {
   background: rgba(0, 0, 0, 0.035);
   color: var(--ink);
@@ -1220,6 +1237,41 @@ input[type="checkbox"]:checked::after {
   background: var(--red-bg);
   color: var(--red-ink);
 }
+
+/* ---- suggested focus ---- */
+
+.focus-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.focus-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.focus-group-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.focus-group-head .panel-eyebrow { margin-bottom: 0; }
+
+.focus-group-head .focus-doc {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.focus-group .hint.small { margin: 0 0 6px; }
 
 /* ============================================================
    buttons

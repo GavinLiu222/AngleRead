@@ -7,7 +7,7 @@
   <!-- tints the browser URL bar to match the top strip -->
   <meta name="theme-color" content="#DCEEFB" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#13283A" media="(prefers-color-scheme: dark)" />
-  <title>ThesisReader — Academic paper reading assistant</title>
+  <title>ThesisReader — Document reading assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" />
@@ -24,7 +24,7 @@
     <div class="announce-inner">
       <span class="announce-tag">Local first</span>
       <p class="announce-text">
-        API keys and settings stay in this browser's local storage. Page images are sent only to the model endpoint you configure.
+        API keys and settings stay in this browser's local storage. Your documents are sent only to the model endpoint you configure.
       </p>
       <a class="announce-link" href="README.md" target="_blank" rel="noreferrer">Setup notes</a>
       <button type="button" class="announce-close" data-dismiss="announce" aria-label="Dismiss notice">
@@ -48,14 +48,6 @@
         </div>
 
         <nav class="side-nav" id="tabs" aria-label="Views">
-          <button class="tab" type="button" data-view="settings">
-            <span class="tab-ico" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M4.8 8.2h14.4M4.8 15.8h14.4" /><circle cx="9.6" cy="8.2" r="2.1" /><circle cx="14.8" cy="15.8" r="2.1" />
-              </svg>
-            </span>
-            <span>Settings</span>
-          </button>
           <button class="tab" type="button" data-view="upload">
             <span class="tab-ico" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -63,6 +55,14 @@
               </svg>
             </span>
             <span>Upload</span>
+          </button>
+          <button class="tab" type="button" data-view="plan">
+            <span class="tab-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4.8 8.2h14.4M4.8 15.8h14.4" /><circle cx="9.6" cy="8.2" r="2.1" /><circle cx="14.8" cy="15.8" r="2.1" />
+              </svg>
+            </span>
+            <span>Reading plan</span>
           </button>
           <button class="tab" type="button" data-view="results">
             <span class="tab-ico" aria-hidden="true">
@@ -83,6 +83,16 @@
         </nav>
 
         <div class="side-foot">
+          <button type="button" class="side-link" id="openModelBtn" data-view="model">
+            <span class="tab-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="7.2" y="7.2" width="9.6" height="9.6" rx="2" />
+                <path d="M10.2 4.4v2.8M13.8 4.4v2.8M10.2 16.8v2.8M13.8 16.8v2.8M4.4 10.2h2.8M4.4 13.8h2.8M16.8 10.2h2.8M16.8 13.8h2.8" />
+              </svg>
+            </span>
+            <span>Model &amp; API</span>
+          </button>
+
           <a class="side-link" href="README.md" target="_blank" rel="noreferrer">
             <span class="tab-ico" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -101,7 +111,7 @@
             <span class="status-dot" data-role="dot" aria-hidden="true"></span>
             <span class="status-text">
               <strong data-role="model">Not configured</strong>
-              <small data-role="host">Open Settings to connect a model</small>
+              <small data-role="host">Open Model &amp; API to connect a model</small>
             </span>
           </button>
         </div>
@@ -118,16 +128,232 @@
       </header>
 
       <main class="app-main">
-    <!-- Settings -->
-    <section class="view" id="view-settings" hidden>
+    <!-- Upload -->
+    <section class="view" id="view-upload" hidden>
       <div class="view-head">
-        <span class="eyebrow">Settings</span>
+        <span class="eyebrow">Upload</span>
+        <h2>Upload documents</h2>
+        <p class="hint">Papers, analyst research, quant strategy reports, long reads — add as many as you like and they are read in parallel.</p>
+      </div>
+
+      <div class="stat-grid" id="uploadStats">
+        <div class="stat">
+          <span class="stat-label">Queued</span>
+          <strong class="stat-value" data-role="files">0</strong>
+          <span class="stat-unit">files</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Combined size</span>
+          <strong class="stat-value" data-role="size">0</strong>
+          <span class="stat-unit">MB</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Page cap per document</span>
+          <strong class="stat-value" data-role="cap">All</strong>
+          <span class="stat-unit">pages</span>
+        </div>
+      </div>
+
+      <div id="dropzone" class="dropzone">
+        <input type="file" id="fileInput" multiple hidden />
+        <span class="dz-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 15.5V4.2" />
+            <path d="m7.6 8.6 4.4-4.4 4.4 4.4" />
+            <path d="M4.2 14.4v3.4a2 2 0 0 0 2 2h11.6a2 2 0 0 0 2-2v-3.4" />
+          </svg>
+        </span>
+        <p class="dz-main">Drop documents here</p>
+        <p class="dz-sub">or <button type="button" class="link" id="browseBtn">browse for files</button></p>
+        <p class="dz-sub">PDF · Word (.docx) · Markdown · plain text · images</p>
+      </div>
+
+      <div id="fileList" class="file-list"></div>
+
+      <label class="auto-suggest-row">
+        <input type="checkbox" id="suggestFullDoc" />
+        <span>Use the full document when guessing what to read for. Off by default: only a sample (the first pages and the last pages, or the opening and ending of a text document) is sent, which is enough for good suggestions and far cheaper on long reports.</span>
+      </label>
+
+      <div class="actions">
+        <button class="primary" id="scanBtn" disabled>Scan &amp; suggest focus<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13.5M13 6.2l6 5.8-6 5.8" /></svg></span></button>
+        <button class="ghost" id="skipSuggestBtn" disabled>Skip suggestions</button>
+        <button class="ghost" id="clearFilesBtn" disabled>Clear list</button>
+      </div>
+    </section>
+
+    <!-- Reading plan -->
+    <section class="view" id="view-plan" hidden>
+      <div class="view-head">
+        <span class="eyebrow">Reading plan</span>
+        <h2>What to read for</h2>
+        <p class="hint">Pick the angles the model proposes for each uploaded document, then fine-tune the fixed sections it always produces.</p>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="panel-eyebrow">Step 1</span>
+            <h3>Suggested focus</h3>
+          </div>
+          <div class="panel-actions">
+            <button class="ghost" id="selectAllFocusBtn" disabled>Select all</button>
+            <button class="ghost" id="resuggestBtn" disabled>Re-suggest</button>
+          </div>
+        </div>
+        <p class="hint">After an upload the model reads each document, works out what it is and guesses what you would want to learn from it. Tick the angles you want — each one becomes an extra section in the analysis, alongside the sections below.</p>
+        <div id="focusSuggestions" class="focus-list">
+          <p class="empty-state">Nothing scanned yet. Upload a document and run “Scan &amp; suggest focus”.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="panel-eyebrow">Step 2</span>
+            <h3>Analysis sections</h3>
+          </div>
+          <div class="panel-actions">
+            <button class="ghost" id="addSectionBtn">Add section</button>
+            <button class="ghost" id="resetSectionsBtn">Restore defaults</button>
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-row span-6">
+            <span>Report language</span>
+            <div class="segmented" id="reportLanguage" role="radiogroup" aria-label="Report language">
+              <label class="segment">
+                <input type="radio" name="reportLanguage" value="en" checked />
+                <span>English</span>
+              </label>
+              <label class="segment">
+                <input type="radio" name="reportLanguage" value="zh" />
+                <span>中文</span>
+              </label>
+            </div>
+          </div>
+
+          <label class="form-row span-6">
+            <span>Max pages per document (0 = no limit)</span>
+            <input type="number" id="maxPages" min="0" value="0" />
+          </label>
+        </div>
+
+        <p class="hint">Enable, disable, edit, add or remove the sections you want the model to produce for every document.</p>
+        <label class="auto-suggest-row">
+          <input type="checkbox" id="autoSuggestSections" />
+          <span>Let the model propose extra sections while it writes: after reading the document it adds angles you are likely to care about that the sections below do not cover. They appear in the results with a violet heading marked “AI added”.</span>
+        </label>
+        <div id="sectionEditor" class="section-editor"></div>
+      </section>
+
+      <div class="actions sticky-actions">
+        <button class="primary" id="startAnalysisBtn" disabled>Start analysis<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13.5M13 6.2l6 5.8-6 5.8" /></svg></span></button>
+      </div>
+    </section>
+
+    <!-- Results -->
+    <section class="view" id="view-results" hidden>
+      <div class="view-head">
+        <span class="eyebrow">Results</span>
+        <h2>Analysis results</h2>
+        <p class="hint">Each card holds one document's structured reading. Export any of them as Markdown.</p>
+      </div>
+
+      <div class="results-toolbar">
+        <div class="stat-grid" id="resultStats">
+          <div class="stat">
+            <span class="stat-label">Documents read</span>
+            <strong class="stat-value" data-role="papers">0</strong>
+            <span class="stat-unit">of 0</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Pages analysed</span>
+            <strong class="stat-value" data-role="pages">0</strong>
+            <span class="stat-unit">pages</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Tokens</span>
+            <strong class="stat-value" data-role="tokens">0</strong>
+            <span class="stat-unit">in / out</span>
+          </div>
+        </div>
+        <div class="progress" id="progress" hidden>
+          <span id="progressText">0 / 0</span>
+          <div class="progress-bar"><div class="progress-bar-fill" id="progressFill"></div></div>
+        </div>
+      </div>
+
+      <div id="resultsList" class="results-list">
+        <p class="empty-state">Nothing analysed yet. Head to the Upload view to pick your documents.</p>
+      </div>
+    </section>
+
+    <!-- Chat -->
+    <section class="view" id="view-chat" hidden>
+      <div class="view-head">
+        <span class="eyebrow">Chat</span>
+        <h2>Chat with your documents</h2>
+        <p class="hint">Ask follow-up questions about the documents you have analysed, NotebookLM style. The model answers from the structured reading and, optionally, the original document itself.</p>
+      </div>
+
+      <div class="chat-empty" id="chatEmpty">
+        <p>No analysed documents yet — run an analysis from the Reading plan view first.</p>
+      </div>
+
+      <div class="chat-container" id="chatContainer" hidden>
+        <aside class="chat-sidebar">
+          <h3>Document context</h3>
+          <p class="hint small">Tick the documents to include:</p>
+          <div id="chatPaperList" class="chat-paper-list"></div>
+          <label class="chat-toggle">
+            <input type="checkbox" id="chatIncludeImages" />
+            <span>Attach the original document<br /><small>Costs far more tokens, but lets the model see the pages, figures and equations themselves</small></span>
+          </label>
+          <div class="chat-monitor">
+            <div class="monitor-line">
+              <span>Estimated input</span>
+              <strong id="chatEstTokens">0</strong>
+            </div>
+            <div class="monitor-line">
+              <span>Last actual</span>
+              <strong id="chatLastTokens">—</strong>
+            </div>
+            <div class="monitor-line">
+              <span>Context limit</span>
+              <strong id="chatLimit">128000</strong>
+            </div>
+            <div class="progress-bar"><div class="progress-bar-fill" id="chatUsageFill"></div></div>
+            <p class="monitor-warning" id="chatWarning" hidden></p>
+          </div>
+          <button class="ghost" id="chatClearBtn">Clear chat</button>
+        </aside>
+        <div class="chat-main">
+          <div id="chatMessages" class="chat-messages">
+            <p class="empty-state">Ask your first question — for example, “What is the core equation of the method? Quote it from the document.”</p>
+          </div>
+          <div class="chat-composer">
+            <textarea id="chatInput" rows="3" placeholder="Press Cmd/Ctrl + Enter to send"></textarea>
+            <div class="composer-actions">
+              <span class="composer-hint" id="composerHint"></span>
+              <button class="primary" id="chatSendBtn" disabled>Send<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5.4M6.2 11 12 5.2 17.8 11" /></svg></span></button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Model & API -->
+    <section class="view" id="view-model" hidden>
+      <div class="view-head">
+        <span class="eyebrow">Model &amp; API</span>
         <h2>Model configuration</h2>
         <p class="hint">Works with third-party cloud models and with a local Ollama. Your API key is stored only in this browser.</p>
       </div>
 
       <div class="notice notice-blue" data-notice="vision">
-        <p>Every page is rendered to an image before it reaches the model, so the model has to accept image input. Text-only models return empty sections. The model picker lists vision-capable models grouped by provider.</p>
+        <p>PDF pages and uploaded images reach the model as images, so reading those requires a vision-capable model — a text-only model returns empty sections. Word, Markdown and plain-text documents are sent as text and work with any model. The model picker lists vision-capable models grouped by provider.</p>
         <button type="button" class="notice-ok" data-dismiss="notice">Got it</button>
       </div>
 
@@ -203,26 +429,7 @@
           If that fails, start Ollama with <code>OLLAMA_ORIGINS=*</code> so the browser is allowed to reach it. Reading figures and equations requires a vision-capable model such as <code>llama3.2-vision</code> or <code>llava</code>.
         </p>
 
-        <div class="form-row span-4">
-          <span>Report language</span>
-          <div class="segmented" id="reportLanguage" role="radiogroup" aria-label="Report language">
-            <label class="segment">
-              <input type="radio" name="reportLanguage" value="en" checked />
-              <span>English</span>
-            </label>
-            <label class="segment">
-              <input type="radio" name="reportLanguage" value="zh" />
-              <span>中文</span>
-            </label>
-          </div>
-        </div>
-
-        <label class="form-row span-4">
-          <span>Max pages (0 = no limit)</span>
-          <input type="number" id="maxPages" min="0" value="0" />
-        </label>
-
-        <label class="form-row span-4">
+        <label class="form-row span-5">
           <span>Context limit (tokens)</span>
           <input type="number" id="contextLimit" min="1000" step="1000" value="128000" />
         </label>
@@ -234,166 +441,9 @@
         </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <div>
-            <span class="panel-eyebrow">Reading template</span>
-            <h3>Analysis sections</h3>
-          </div>
-          <div class="panel-actions">
-            <button class="ghost" id="addSectionBtn">Add section</button>
-            <button class="ghost" id="resetSectionsBtn">Restore defaults</button>
-          </div>
-        </div>
-        <p class="hint">Enable, disable, edit, add or remove the sections you want the model to produce.</p>
-        <label class="auto-suggest-row">
-          <input type="checkbox" id="autoSuggestSections" />
-          <span>Let the model propose extra sections: after reading the paper it suggests angles you are likely to care about that the sections below do not cover. They appear in the results with a violet heading marked “AI added”.</span>
-        </label>
-        <div id="sectionEditor" class="section-editor"></div>
-      </section>
-
       <div class="actions sticky-actions">
         <button class="primary" id="saveConfigBtn">Save configuration<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.8 9.4 17 19 7.4" /></svg></span></button>
         <button class="danger" id="clearStorageBtn">Clear all storage</button>
-      </div>
-    </section>
-
-    <!-- Upload -->
-    <section class="view" id="view-upload" hidden>
-      <div class="view-head">
-        <span class="eyebrow">Upload</span>
-        <h2>Upload papers</h2>
-        <p class="hint">Add as many PDFs as you like — they are analysed in parallel.</p>
-      </div>
-
-      <div class="stat-grid" id="uploadStats">
-        <div class="stat">
-          <span class="stat-label">Queued</span>
-          <strong class="stat-value" data-role="files">0</strong>
-          <span class="stat-unit">files</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Combined size</span>
-          <strong class="stat-value" data-role="size">0</strong>
-          <span class="stat-unit">MB</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">Page cap per paper</span>
-          <strong class="stat-value" data-role="cap">All</strong>
-          <span class="stat-unit">pages</span>
-        </div>
-      </div>
-
-      <div id="dropzone" class="dropzone">
-        <input type="file" id="fileInput" accept="application/pdf" multiple hidden />
-        <span class="dz-glyph" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 15.5V4.2" />
-            <path d="m7.6 8.6 4.4-4.4 4.4 4.4" />
-            <path d="M4.2 14.4v3.4a2 2 0 0 0 2 2h11.6a2 2 0 0 0 2-2v-3.4" />
-          </svg>
-        </span>
-        <p class="dz-main">Drop PDF files here</p>
-        <p class="dz-sub">or <button type="button" class="link" id="browseBtn">browse for files</button></p>
-      </div>
-
-      <div id="fileList" class="file-list"></div>
-
-      <div class="actions">
-        <button class="primary" id="analyzeBtn" disabled>Start analysis<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13.5M13 6.2l6 5.8-6 5.8" /></svg></span></button>
-        <button class="ghost" id="clearFilesBtn" disabled>Clear list</button>
-      </div>
-    </section>
-
-    <!-- Chat -->
-    <section class="view" id="view-chat" hidden>
-      <div class="view-head">
-        <span class="eyebrow">Chat</span>
-        <h2>Chat with your papers</h2>
-        <p class="hint">Ask follow-up questions about the papers you have analysed, NotebookLM style. The model answers from the structured reading and, optionally, the original page images.</p>
-      </div>
-
-      <div class="chat-empty" id="chatEmpty">
-        <p>No analysed papers yet — run an analysis from the Upload view first.</p>
-      </div>
-
-      <div class="chat-container" id="chatContainer" hidden>
-        <aside class="chat-sidebar">
-          <h3>Paper context</h3>
-          <p class="hint small">Tick the papers to include:</p>
-          <div id="chatPaperList" class="chat-paper-list"></div>
-          <label class="chat-toggle">
-            <input type="checkbox" id="chatIncludeImages" />
-            <span>Attach original page images<br /><small>Costs far more tokens, but lets the model see the figures and equations themselves</small></span>
-          </label>
-          <div class="chat-monitor">
-            <div class="monitor-line">
-              <span>Estimated input</span>
-              <strong id="chatEstTokens">0</strong>
-            </div>
-            <div class="monitor-line">
-              <span>Last actual</span>
-              <strong id="chatLastTokens">—</strong>
-            </div>
-            <div class="monitor-line">
-              <span>Context limit</span>
-              <strong id="chatLimit">128000</strong>
-            </div>
-            <div class="progress-bar"><div class="progress-bar-fill" id="chatUsageFill"></div></div>
-            <p class="monitor-warning" id="chatWarning" hidden></p>
-          </div>
-          <button class="ghost" id="chatClearBtn">Clear chat</button>
-        </aside>
-        <div class="chat-main">
-          <div id="chatMessages" class="chat-messages">
-            <p class="empty-state">Ask your first question — for example, “What is the core equation of the method? Quote it from the paper.”</p>
-          </div>
-          <div class="chat-composer">
-            <textarea id="chatInput" rows="3" placeholder="Press Cmd/Ctrl + Enter to send"></textarea>
-            <div class="composer-actions">
-              <span class="composer-hint" id="composerHint"></span>
-              <button class="primary" id="chatSendBtn" disabled>Send<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5.4M6.2 11 12 5.2 17.8 11" /></svg></span></button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Results -->
-    <section class="view" id="view-results" hidden>
-      <div class="view-head">
-        <span class="eyebrow">Results</span>
-        <h2>Analysis results</h2>
-        <p class="hint">Each card holds one paper's structured reading. Export any of them as Markdown.</p>
-      </div>
-
-      <div class="results-toolbar">
-        <div class="stat-grid" id="resultStats">
-          <div class="stat">
-            <span class="stat-label">Papers read</span>
-            <strong class="stat-value" data-role="papers">0</strong>
-            <span class="stat-unit">of 0</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">Pages analysed</span>
-            <strong class="stat-value" data-role="pages">0</strong>
-            <span class="stat-unit">pages</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">Tokens</span>
-            <strong class="stat-value" data-role="tokens">0</strong>
-            <span class="stat-unit">in / out</span>
-          </div>
-        </div>
-        <div class="progress" id="progress" hidden>
-          <span id="progressText">0 / 0</span>
-          <div class="progress-bar"><div class="progress-bar-fill" id="progressFill"></div></div>
-        </div>
-      </div>
-
-      <div id="resultsList" class="results-list">
-        <p class="empty-state">Nothing analysed yet. Head to the Upload view to pick your papers.</p>
       </div>
     </section>
       </main>

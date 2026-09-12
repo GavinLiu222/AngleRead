@@ -1,4 +1,4 @@
-import { stripBase64Prefix } from './pdfProcessor.js';
+import { stripBase64Prefix, dataUrlMediaType } from './docProcessor.js';
 
 const IMAGE_TOKEN_ESTIMATE = 1500;
 
@@ -85,34 +85,60 @@ function normalizeAnthropicUsage(u) {
   return { input, output, total };
 }
 
-function buildOpenAIContent(prompt, images) {
+/* 内容块：{type:'image', dataUrl} / {type:'text', text, label?}。
+   为了向后兼容，纯 data URL 字符串数组同样接受。 */
+function normalizeParts(parts) {
+  if (!Array.isArray(parts)) return [];
+  return parts
+    .map((part) => {
+      if (typeof part === 'string') return { type: 'image', dataUrl: part };
+      if (part?.type === 'image' && part.dataUrl) return part;
+      if (part?.type === 'text' && part.text) return part;
+      return null;
+    })
+    .filter(Boolean);
+}
+
+function buildOpenAIContent(prompt, parts) {
   const content = [{ type: 'text', text: prompt }];
-  images.forEach((dataUrl, i) => {
-    content.push({ type: 'text', text: `--- Page ${i + 1} ---` });
-    content.push({ type: 'image_url', image_url: { url: dataUrl } });
-  });
+  let page = 0;
+  for (const part of normalizeParts(parts)) {
+    if (part.type === 'image') {
+      page += 1;
+      content.push({ type: 'text', text: `--- Page ${page} ---` });
+      content.push({ type: 'image_url', image_url: { url: part.dataUrl } });
+    } else {
+      content.push({ type: 'text', text: `--- ${part.label || 'Document text'} ---\n${part.text}` });
+    }
+  }
   return content;
 }
 
-function buildAnthropicContent(prompt, images) {
+function buildAnthropicContent(prompt, parts) {
   const content = [{ type: 'text', text: prompt }];
-  images.forEach((dataUrl, i) => {
-    content.push({ type: 'text', text: `--- Page ${i + 1} ---` });
-    content.push({
-      type: 'image',
-      source: {
-        type: 'base64',
-        media_type: 'image/png',
-        data: stripBase64Prefix(dataUrl),
-      },
-    });
-  });
+  let page = 0;
+  for (const part of normalizeParts(parts)) {
+    if (part.type === 'image') {
+      page += 1;
+      content.push({ type: 'text', text: `--- Page ${page} ---` });
+      content.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: dataUrlMediaType(part.dataUrl),
+          data: stripBase64Prefix(part.dataUrl),
+        },
+      });
+    } else {
+      content.push({ type: 'text', text: `--- ${part.label || 'Document text'} ---\n${part.text}` });
+    }
+  }
   return content;
 }
 
-async function callOpenAI({ apiUrl, apiKey, model }, prompt, images) {
+async function callOpenAI({ apiUrl, apiKey, model }, prompt, parts) {
   const url = apiEndpoint(apiUrl, 'chat/completions');
-  const content = buildOpenAIContent(prompt, images);
+  const content = buildOpenAIContent(prompt, parts);
   const body = {
     model,
     messages: [{ role: 'user', content }],
@@ -126,9 +152,9 @@ async function callOpenAI({ apiUrl, apiKey, model }, prompt, images) {
   };
 }
 
-async function callAnthropic({ apiUrl, apiKey, model }, prompt, images) {
+async function callAnthropic({ apiUrl, apiKey, model }, prompt, parts) {
   const url = apiEndpoint(apiUrl, 'messages');
-  const content = buildAnthropicContent(prompt, images);
+  const content = buildAnthropicContent(prompt, parts);
   const body = {
     model,
     max_tokens: 8192,
@@ -159,12 +185,12 @@ function normalizeForOpenAI(config) {
   return config;
 }
 
-export async function callLLM(config, prompt, images) {
+export async function callLLM(config, prompt, parts) {
   assertConfig(config);
   if (config.apiFormat === 'anthropic') {
-    return callAnthropic(config, prompt, images);
+    return callAnthropic(config, prompt, parts);
   }
-  return callOpenAI(normalizeForOpenAI(config), prompt, images);
+  return callOpenAI(normalizeForOpenAI(config), prompt, parts);
 }
 
 /* ---------------- chat (multi-turn) ---------------- */
@@ -173,8 +199,8 @@ export async function callLLM(config, prompt, images) {
  * Chat completion with paper context.
  * @param {object} config
  * @param {string} systemPrompt
- * @param {Array<{role:'user'|'assistant', text:string, images?:string[]}>} turns
- *   `images` only attached to the first user turn that has them.
+ * @param {Array<{role:'user'|'assistant', text:string, parts?:Array}>} turns
+ *   `parts` (page images / document text) only attached to the first user turn that has them.
  */
 export async function chatLLM(config, systemPrompt, turns) {
   assertConfig(config);
@@ -189,8 +215,8 @@ async function chatOpenAI({ apiUrl, apiKey, model }, systemPrompt, turns) {
   const messages = [];
   if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
   for (const t of turns) {
-    if (t.images && t.images.length) {
-      messages.push({ role: t.role, content: buildOpenAIContent(t.text || '', t.images) });
+    if (t.parts && t.parts.length) {
+      messages.push({ role: t.role, content: buildOpenAIContent(t.text || '', t.parts) });
     } else {
       messages.push({ role: t.role, content: t.text || '' });
     }
@@ -207,8 +233,8 @@ async function chatAnthropic({ apiUrl, apiKey, model }, systemPrompt, turns) {
   const url = apiEndpoint(apiUrl, 'messages');
   const messages = [];
   for (const t of turns) {
-    if (t.images && t.images.length) {
-      messages.push({ role: t.role, content: buildAnthropicContent(t.text || '', t.images) });
+    if (t.parts && t.parts.length) {
+      messages.push({ role: t.role, content: buildAnthropicContent(t.text || '', t.parts) });
     } else {
       messages.push({ role: t.role, content: [{ type: 'text', text: t.text || '' }] });
     }
@@ -286,8 +312,14 @@ export function estimateTextTokens(text) {
   return Math.ceil(text.length / 2.5);
 }
 
-export function estimateImageTokens(count) {
-  return count * IMAGE_TOKEN_ESTIMATE;
+/** 内容块的估算：图片按固定单价，文本按字符数 */
+export function estimatePartsTokens(parts) {
+  let total = 0;
+  for (const part of normalizeParts(parts)) {
+    if (part.type === 'image') total += IMAGE_TOKEN_ESTIMATE + 12;
+    else total += estimateTextTokens(part.text) + 12;
+  }
+  return total;
 }
 
 /**
@@ -297,7 +329,7 @@ export function estimateChatTokens(systemPrompt, turns) {
   let total = estimateTextTokens(systemPrompt || '');
   for (const t of turns) {
     total += estimateTextTokens(t.text || '');
-    if (t.images?.length) total += estimateImageTokens(t.images.length);
+    if (t.parts?.length) total += estimatePartsTokens(t.parts);
   }
   total += turns.length * 8;
   return total;
@@ -306,6 +338,6 @@ export function estimateChatTokens(systemPrompt, turns) {
 /**
  * Estimate tokens for a single-shot analysis call.
  */
-export function estimateAnalysisTokens(prompt, imageCount) {
-  return estimateTextTokens(prompt) + estimateImageTokens(imageCount) + imageCount * 12;
+export function estimateAnalysisTokens(prompt, parts) {
+  return estimateTextTokens(prompt) + estimatePartsTokens(parts);
 }

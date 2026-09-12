@@ -13,10 +13,11 @@ import {
   reportLanguageDirective,
   isConfigReady,
 } from './config.js';
-import { estimateChatTokens, estimateTextTokens, fetchModelList } from './llmClient.js';
+import { estimateChatTokens, fetchModelList } from './llmClient.js';
 import { API_PRESETS, MODEL_PRESETS, guessProviderKey } from './presets.js';
+import { SUPPORTED_ACCEPT, isSupportedFile, unsupportedReason, fileKind } from './docProcessor.js';
 
-const VIEWS = ['settings', 'upload', 'results', 'chat'];
+const VIEWS = ['upload', 'plan', 'results', 'chat', 'model'];
 
 const ICON_DOC =
   '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3.4H7.6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h8.8a2 2 0 0 0 2-2V8.2Z"/><path d="M14 3.4V8.2h4.4"/><path d="M8.9 13h6.2M8.9 16.3h4"/></svg>';
@@ -31,7 +32,7 @@ export function switchView(name) {
     const el = document.getElementById('view-' + v);
     if (el) el.hidden = v !== name;
   }
-  for (const tab of document.querySelectorAll('.tab')) {
+  for (const tab of document.querySelectorAll('.tab, .side-link[data-view]')) {
     tab.classList.toggle('active', tab.dataset.view === name);
   }
   // 文档列是独立滚动容器，换视图时回到顶部
@@ -51,7 +52,7 @@ export function renderConnectionStatus() {
   if (hostEl) {
     hostEl.textContent = ready
       ? `${apiHost(cfg.apiUrl)} · ${cfg.apiFormat}`
-      : 'Open Settings to connect a model';
+      : 'Open Model & API to connect a model';
   }
   box.title = ready ? `${cfg.model} — ${cfg.apiUrl}` : 'No model configured yet';
 }
@@ -81,23 +82,28 @@ export function toast(message, type = '') {
   }, 2400);
 }
 
-/* ---------------- settings view ---------------- */
-export function renderSettings() {
+/* ---------------- model & api view ---------------- */
+export function renderModelView() {
   const cfg = getConfig();
   document.getElementById('apiUrl').value = cfg.apiUrl;
   document.getElementById('apiKey').value = cfg.apiKey;
   document.getElementById('apiFormat').value = cfg.apiFormat;
   document.getElementById('modelName').value = cfg.model;
-  document.getElementById('maxPages').value = cfg.maxPages;
   document.getElementById('contextLimit').value = cfg.contextLimit;
   document.getElementById('rememberKey').checked = cfg.rememberKey;
-  document.getElementById('autoSuggestSections').checked = cfg.autoSuggestSections;
-  setReportLanguage(cfg.reportLanguage);
   renderProfiles();
   updateProviderUI();
   renderModelChips([]);
-  renderSectionEditor();
   renderConnectionStatus();
+}
+
+/* ---------------- reading plan view ---------------- */
+export function renderPlanView() {
+  const cfg = getConfig();
+  document.getElementById('maxPages').value = cfg.maxPages;
+  document.getElementById('autoSuggestSections').checked = cfg.autoSuggestSections;
+  setReportLanguage(cfg.reportLanguage);
+  renderSectionEditor();
 }
 
 /* ---------------- model config profiles ---------------- */
@@ -429,7 +435,7 @@ function onSectionEdit(e) {
   setSections(sections);
 }
 
-export function bindSettingsActions({ onSaved }) {
+export function bindModelActions({ onSaved }) {
   document.getElementById('toggleKeyVisibility').addEventListener('click', () => {
     const input = document.getElementById('apiKey');
     const btn = document.getElementById('toggleKeyVisibility');
@@ -510,6 +516,52 @@ export function bindSettingsActions({ onSaved }) {
     }
   });
 
+  document.getElementById('saveConfigBtn').addEventListener('click', () => {
+    const apiUrl = document.getElementById('apiUrl').value.trim();
+    const apiKey = document.getElementById('apiKey').value.trim();
+    const apiFormat = document.getElementById('apiFormat').value;
+    const model = document.getElementById('modelName').value.trim();
+    const contextLimit = Math.max(1000, parseInt(document.getElementById('contextLimit').value, 10) || 128000);
+    const rememberKey = document.getElementById('rememberKey').checked;
+    const needKey = apiFormat !== 'ollama';
+    if (!apiUrl || !model || (needKey && !apiKey)) {
+      toast(
+        needKey
+          ? 'API URL, API key and model are all required'
+          : 'API URL and model are both required',
+        'error',
+      );
+      return;
+    }
+    const next = setConfig({
+      apiUrl,
+      apiKey,
+      apiFormat,
+      model,
+      contextLimit,
+      rememberKey,
+    });
+    rememberProfile(next);
+    renderProfiles();
+    renderConnectionStatus();
+    toast('Configuration saved', 'success');
+    onSaved?.();
+  });
+
+  document.getElementById('clearStorageBtn').addEventListener('click', () => {
+    if (!confirm('Clear all local storage (API details and custom sections)?')) return;
+    clearAllStorage();
+    renderModelView();
+    renderPlanView();
+    toast('Local storage cleared');
+  });
+
+  initPresetCombos();
+}
+
+/* ---------------- reading plan actions ----------------
+   这一页上的设置都是改即存，不需要单独的保存按钮。 */
+export function bindPlanActions({ onStartAnalysis, onResuggest, onSelectAllFocus }) {
   document.getElementById('addSectionBtn').addEventListener('click', () => {
     const sections = getSections();
     sections.push({
@@ -528,52 +580,7 @@ export function bindSettingsActions({ onSaved }) {
     toast('Default sections restored');
   });
 
-  document.getElementById('saveConfigBtn').addEventListener('click', () => {
-    const apiUrl = document.getElementById('apiUrl').value.trim();
-    const apiKey = document.getElementById('apiKey').value.trim();
-    const apiFormat = document.getElementById('apiFormat').value;
-    const model = document.getElementById('modelName').value.trim();
-    const maxPages = Math.max(0, parseInt(document.getElementById('maxPages').value, 10) || 0);
-    const contextLimit = Math.max(1000, parseInt(document.getElementById('contextLimit').value, 10) || 128000);
-    const rememberKey = document.getElementById('rememberKey').checked;
-    const autoSuggestSections = document.getElementById('autoSuggestSections').checked;
-    const reportLanguage = getReportLanguage();
-    const needKey = apiFormat !== 'ollama';
-    if (!apiUrl || !model || (needKey && !apiKey)) {
-      toast(
-        needKey
-          ? 'API URL, API key and model are all required'
-          : 'API URL and model are both required',
-        'error',
-      );
-      return;
-    }
-    const next = setConfig({
-      apiUrl,
-      apiKey,
-      apiFormat,
-      model,
-      maxPages,
-      contextLimit,
-      rememberKey,
-      autoSuggestSections,
-      reportLanguage,
-    });
-    rememberProfile(next);
-    renderProfiles();
-    renderConnectionStatus();
-    toast('Configuration saved', 'success');
-    onSaved?.();
-  });
-
-  document.getElementById('clearStorageBtn').addEventListener('click', () => {
-    if (!confirm('Clear all local storage (API details and custom sections)?')) return;
-    clearAllStorage();
-    renderSettings();
-    toast('Local storage cleared');
-  });
-
-  // 语言是即时生效的偏好，改完就落盘，不必等「Save configuration」
+  // 语言是即时生效的偏好，改完就落盘
   for (const radio of document.querySelectorAll('input[name="reportLanguage"]')) {
     radio.addEventListener('change', () => {
       const lang = getReportLanguage();
@@ -582,7 +589,21 @@ export function bindSettingsActions({ onSaved }) {
     });
   }
 
-  initPresetCombos();
+  const maxPagesInput = document.getElementById('maxPages');
+  maxPagesInput.addEventListener('change', () => {
+    const maxPages = Math.max(0, parseInt(maxPagesInput.value, 10) || 0);
+    maxPagesInput.value = maxPages;
+    setConfig({ maxPages });
+    renderUploadStats(uploadFiles);
+  });
+
+  document.getElementById('autoSuggestSections').addEventListener('change', (e) => {
+    setConfig({ autoSuggestSections: e.target.checked });
+  });
+
+  document.getElementById('startAnalysisBtn').addEventListener('click', () => onStartAnalysis?.());
+  document.getElementById('resuggestBtn').addEventListener('click', () => onResuggest?.());
+  document.getElementById('selectAllFocusBtn').addEventListener('click', () => onSelectAllFocus?.());
 }
 
 function escapeAttr(s) {
@@ -590,15 +611,38 @@ function escapeAttr(s) {
 }
 
 /* ---------------- upload view ---------------- */
-export function bindUploadActions({ files, onAnalyze }) {
+/* Reading plan 上的 Max pages 改动要刷新上传统计，这里留一个引用 */
+let uploadFiles = [];
+
+export function bindUploadActions({ files, onScan, onSkip, onFilesChanged }) {
+  uploadFiles = files;
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('fileInput');
   const browseBtn = document.getElementById('browseBtn');
-  const analyzeBtn = document.getElementById('analyzeBtn');
+  const scanBtn = document.getElementById('scanBtn');
+  const skipBtn = document.getElementById('skipSuggestBtn');
   const clearBtn = document.getElementById('clearFilesBtn');
+  const fullDocBox = document.getElementById('suggestFullDoc');
 
-  const refresh = () => renderFileList(files, refresh);
+  fileInput.accept = SUPPORTED_ACCEPT;
+  fullDocBox.checked = getConfig().suggestFullDoc;
+  fullDocBox.addEventListener('change', () => {
+    setConfig({ suggestFullDoc: fullDocBox.checked });
+  });
+
+  const refresh = () => {
+    renderFileList(files, refresh);
+    updateUploadButtons(files);
+    onFilesChanged?.(files);
+  };
+  renderFileList(files, refresh);
   renderUploadStats(files);
+
+  const accept = (incoming) => {
+    const rejected = addFiles(incoming, files);
+    if (rejected.length) toast(unsupportedReason(rejected[0]), 'error');
+    refresh();
+  };
 
   browseBtn.addEventListener('click', () => fileInput.click());
   dropzone.addEventListener('click', (e) => {
@@ -606,10 +650,8 @@ export function bindUploadActions({ files, onAnalyze }) {
     fileInput.click();
   });
   fileInput.addEventListener('change', () => {
-    addFiles(Array.from(fileInput.files || []), files);
+    accept(Array.from(fileInput.files || []));
     fileInput.value = '';
-    refresh();
-    updateUploadButtons(files);
   });
 
   dropzone.addEventListener('dragover', (e) => {
@@ -620,30 +662,40 @@ export function bindUploadActions({ files, onAnalyze }) {
   dropzone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropzone.classList.remove('drag-active');
-    addFiles(Array.from(e.dataTransfer.files || []), files);
-    refresh();
-    updateUploadButtons(files);
+    accept(Array.from(e.dataTransfer.files || []));
   });
 
   clearBtn.addEventListener('click', () => {
     files.length = 0;
     refresh();
-    updateUploadButtons(files);
   });
 
-  analyzeBtn.addEventListener('click', () => {
+  scanBtn.addEventListener('click', () => {
     if (!files.length) return;
-    onAnalyze(files.slice());
+    onScan?.(files.slice());
+  });
+
+  skipBtn.addEventListener('click', () => {
+    if (!files.length) return;
+    onSkip?.(files.slice());
   });
 }
 
+/** @returns {File[]} 被拒绝的文件（格式不支持） */
 function addFiles(incoming, store) {
+  const rejected = [];
   for (const f of incoming) {
-    if (!f.name.toLowerCase().endsWith('.pdf') && f.type !== 'application/pdf') continue;
+    if (!isSupportedFile(f)) {
+      rejected.push(f);
+      continue;
+    }
     if (store.some((s) => s.name === f.name && s.size === f.size)) continue;
     store.push(f);
   }
+  return rejected;
 }
+
+const KIND_LABEL = { pdf: 'PDF', image: 'Image', word: 'Word', text: 'Text' };
 
 function renderFileList(files, refresh) {
   const list = document.getElementById('fileList');
@@ -655,22 +707,23 @@ function renderFileList(files, refresh) {
       <div class="name">
         <span class="doc-ico">${ICON_DOC}</span>
         <span>${escapeText(f.name)}</span>
-        <span class="size">${formatSize(f.size)}</span>
+        <span class="size">${KIND_LABEL[fileKind(f)] || 'File'} · ${formatSize(f.size)}</span>
       </div>
       <button class="remove" title="Remove">×</button>
     `;
     row.querySelector('.remove').addEventListener('click', () => {
       files.splice(idx, 1);
       refresh();
-      updateUploadButtons(files);
     });
     list.appendChild(row);
   });
 }
 
 function updateUploadButtons(files) {
-  document.getElementById('analyzeBtn').disabled = files.length === 0;
-  document.getElementById('clearFilesBtn').disabled = files.length === 0;
+  const empty = files.length === 0;
+  document.getElementById('scanBtn').disabled = empty;
+  document.getElementById('skipSuggestBtn').disabled = empty;
+  document.getElementById('clearFilesBtn').disabled = empty;
   renderUploadStats(files);
 }
 
@@ -688,10 +741,143 @@ function renderUploadStats(files) {
   set('cap', cap > 0 ? String(cap) : 'All');
 }
 
+/* ---------------- suggested focus (reading plan · step 1) ----------------
+   docs: [{ name, status, docType, docSummary, sampled, items, selected:Set, error }] */
+
+const FOCUS_STATUS = {
+  pending: ['Queued', 'pending'],
+  working: ['Reading', 'processing'],
+  done: ['Ready', 'done'],
+  error: ['Failed', 'error'],
+};
+
+export function renderFocusSuggestions(docs, { onToggle, onRetry } = {}) {
+  const root = document.getElementById('focusSuggestions');
+  if (!root) return;
+  root.innerHTML = '';
+  const list = docs || [];
+
+  if (!list.length) {
+    root.innerHTML =
+      '<p class="empty-state">Nothing scanned yet. Upload a document and run “Scan &amp; suggest focus”.</p>';
+    updateFocusButtons(list);
+    return;
+  }
+
+  list.forEach((doc, docIdx) => {
+    const group = document.createElement('div');
+    group.className = 'focus-group';
+    const [label, cls] = FOCUS_STATUS[doc.status] || FOCUS_STATUS.pending;
+    const badgeText = doc.status === 'done' && doc.docType ? doc.docType : label;
+    group.innerHTML = `
+      <div class="focus-group-head">
+        <span class="panel-eyebrow">Document ${docIdx + 1}</span>
+        <span class="focus-doc">${escapeText(doc.name)}</span>
+        <span class="badge ${cls}">${escapeText(badgeText)}</span>
+      </div>
+    `;
+
+    if (doc.status === 'error') {
+      const err = document.createElement('div');
+      err.className = 'error-block';
+      err.textContent = doc.error || 'The model could not suggest anything for this document.';
+      const retry = document.createElement('button');
+      retry.className = 'ghost retry';
+      retry.textContent = 'Retry';
+      retry.addEventListener('click', () => onRetry?.(docIdx));
+      err.appendChild(document.createElement('br'));
+      err.appendChild(retry);
+      group.appendChild(err);
+      root.appendChild(group);
+      return;
+    }
+
+    if (doc.status !== 'done') {
+      const note = document.createElement('p');
+      note.className = 'hint small';
+      note.textContent =
+        doc.status === 'working'
+          ? doc.statusText || 'Reading the document and working out what is worth learning from it…'
+          : 'Waiting to start…';
+      group.appendChild(note);
+      root.appendChild(group);
+      return;
+    }
+
+    if (doc.docSummary || doc.sampled) {
+      const note = document.createElement('p');
+      note.className = 'hint small';
+      note.textContent = [doc.docSummary, doc.sampled ? '(Suggested from a sample of the document.)' : '']
+        .filter(Boolean)
+        .join(' ');
+      group.appendChild(note);
+    }
+
+    doc.items.forEach((item) => {
+      const row = document.createElement('label');
+      row.className = 'chat-paper-item';
+      row.innerHTML = `
+        <input type="checkbox" ${doc.selected?.has(item.id) ? 'checked' : ''} />
+        <div>
+          <span class="pp-name">${escapeText(item.title)}</span>
+          <span class="pp-meta">${escapeText(item.why || '')}</span>
+        </div>
+      `;
+      row.querySelector('input').addEventListener('change', (e) => {
+        onToggle?.(docIdx, item.id, e.target.checked);
+      });
+      group.appendChild(row);
+    });
+
+    root.appendChild(group);
+  });
+
+  updateFocusButtons(list);
+}
+
+/** 勾选变化时只刷新按钮状态，避免重绘整张清单（那会让复选框失去焦点） */
+export function refreshFocusButtons(docs) {
+  updateFocusButtons(docs);
+}
+
+function updateFocusButtons(docs) {
+  const anyItems = (docs || []).some((d) => d.status === 'done' && d.items?.length);
+  const selectAll = document.getElementById('selectAllFocusBtn');
+  const resuggest = document.getElementById('resuggestBtn');
+  if (selectAll) {
+    const allSelected =
+      anyItems &&
+      docs.every((d) => d.status !== 'done' || d.items.every((i) => d.selected?.has(i.id)));
+    selectAll.disabled = !anyItems;
+    selectAll.textContent = allSelected ? 'Select none' : 'Select all';
+  }
+  if (resuggest) resuggest.disabled = !(docs || []).length;
+}
+
+/** Reading plan 底部的「Start analysis」：只要队列里有文档就可以点 */
+export function setPlanReady(ready) {
+  const btn = document.getElementById('startAnalysisBtn');
+  if (btn) btn.disabled = !ready;
+}
+
 function escapeText(s) {
   const div = document.createElement('div');
   div.textContent = String(s ?? '');
   return div.innerHTML;
+}
+
+/** 「读了多少」的人话描述：PDF 论页，文本论字符，图片论张数 */
+function describeExtent({ kind, pageCount, includedPages, textChars } = {}) {
+  if (kind === 'image') return `${includedPages || 1} image`;
+  if (kind === 'word' || kind === 'text') {
+    return textChars ? `${formatCount(textChars)} characters of text` : 'text document';
+  }
+  if (pageCount) return `${pageCount} pages total, ${includedPages} analysed`;
+  return textChars ? `${formatCount(textChars)} characters of text` : `${includedPages || 0} pages analysed`;
+}
+
+function formatCount(n) {
+  return n >= 10000 ? `${Math.round(n / 1000)}k` : n.toLocaleString();
 }
 
 function formatSize(bytes) {
@@ -835,11 +1021,11 @@ export function renderItemResult(idx, payload, onRetry) {
   const exportBtn = card.querySelector('[data-role="export"]');
   if (exportBtn) exportBtn.hidden = false;
   const body = card.querySelector('[data-role="body"]');
-  const { result, sectionsUsed, aiSuggested, pageCount, includedPages, pageImages, usage, estimatedTokens } = payload;
+  const { result, sectionsUsed, aiSuggested, usage, estimatedTokens } = payload;
   body.innerHTML = '';
   const meta = document.createElement('p');
   meta.className = 'hint';
-  meta.textContent = `${pageCount} pages total, ${includedPages} analysed`;
+  meta.textContent = describeExtent(payload);
   body.appendChild(meta);
   const usageLine = document.createElement('p');
   usageLine.className = 'usage-line';
@@ -854,7 +1040,9 @@ export function renderItemResult(idx, payload, onRetry) {
     block.className = 'section-block';
     const raw = valueToMarkdown(result?.[s.id]);
     block.innerHTML = `
-      <div class="section-title">${escapeText(s.title)}</div>
+      <div class="section-title${s.ai ? ' ai-suggested' : ''}">${escapeText(s.title)}${
+        s.ai ? '<span class="ai-badge">Your focus</span>' : ''
+      }</div>
       <div class="section-content"></div>
     `;
     const contentEl = block.querySelector('.section-content');
@@ -875,7 +1063,7 @@ export function renderItemResult(idx, payload, onRetry) {
   if (!resultTotals.counted.has(idx)) {
     resultTotals.counted.add(idx);
     resultTotals.papers += 1;
-    resultTotals.pages += includedPages || 0;
+    resultTotals.pages += payload.includedPages || 0;
     resultTotals.tokensIn += usage?.input ?? estimatedTokens ?? 0;
     resultTotals.tokensOut += usage?.output ?? 0;
     renderResultStats();
@@ -962,9 +1150,9 @@ function renderRichContent(text, targetEl) {
 
 /* ---------------- markdown export ---------------- */
 function generateMarkdown(filename, payload) {
-  const { result, sectionsUsed, aiSuggested, pageCount, includedPages } = payload;
+  const { result, sectionsUsed, aiSuggested } = payload;
   const zh = getConfig().reportLanguage === 'zh';
-  const title = filename.replace(/\.pdf$/i, '');
+  const title = filename.replace(/\.[^.]+$/, '');
   const now = new Date();
   const stamp = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
   const pageRef = (_, n) => (zh ? `_（见原论文第 ${n} 页）_` : `_(see page ${n} of the paper)_`);
@@ -972,16 +1160,17 @@ function generateMarkdown(filename, payload) {
   lines.push(`# ${title}`, '');
   if (zh) {
     lines.push(`> 原始文件：\`${filename}\`  `);
-    lines.push(`> 总页数：${pageCount}，分析页数：${includedPages}  `);
+    lines.push(`> 读取范围：${describeExtent(payload)}  `);
     lines.push(`> 生成时间：${stamp}`, '');
   } else {
     lines.push(`> Source file: \`${filename}\`  `);
-    lines.push(`> ${pageCount} pages total, ${includedPages} analysed  `);
+    lines.push(`> Read: ${describeExtent(payload)}  `);
     lines.push(`> Generated: ${stamp}`, '');
   }
   for (const s of sectionsUsed) {
     const content = valueToMarkdown(result?.[s.id]).replace(PAGE_REF_RE, pageRef);
-    lines.push(`## ${s.title}`, '', content, '');
+    const mark = s.ai ? (zh ? ' _(你选中的角度)_' : ' _(your focus)_') : '';
+    lines.push(`## ${s.title}${mark}`, '', content, '');
   }
   for (const s of aiSuggested || []) {
     const content = valueToMarkdown(s.content).replace(PAGE_REF_RE, pageRef);
@@ -1015,7 +1204,7 @@ function downloadText(text, filename, mime = 'text/plain') {
 const chatState = {
   papers: [],
   selected: new Set(),
-  includeImages: false,
+  includeSource: false,
   messages: [],
   lastUsage: null,
   onSend: null,
@@ -1023,12 +1212,12 @@ const chatState = {
 
 function chatSystemInstruction() {
   return [
-    'You are a rigorous academic-paper reading assistant. The user has already analysed the papers listed below and now wants to ask follow-up questions.',
-    'Answer from those papers, and follow these rules:',
-    '1. Prefer concrete evidence from the papers (terminology, numbers, equations, page references) over speculation. If the context does not contain the answer, say so plainly.',
+    'You are a rigorous reading assistant for dense professional documents — academic papers, analyst research, quantitative strategy reports, long-form journalism, whitepapers and filings. The user has already analysed the documents listed below and now wants to ask follow-up questions.',
+    'Answer from those documents, and follow these rules:',
+    '1. Prefer concrete evidence from the documents (terminology, numbers, equations, page or section references) over speculation. If the context does not contain the answer, say so plainly.',
     '2. **Mathematics**: whenever a derivation or formula is involved, use LaTeX — inline `$...$`, display `$$...$$` (no extra backslash escaping is needed in chat).',
     '3. **Tables**: use Markdown tables for structured information such as comparisons, hyper-parameter lists and metric breakdowns.',
-    '4. **Figures and diagrams in the papers**: never try to embed an image. Describe the figure in one sentence and cite the page as `(see page N)` so the user can look it up.',
+    '4. **Figures and diagrams in the documents**: never try to embed an image. Describe the figure in one sentence and cite where it sits (`(see page N)`, or the section heading for a text document) so the user can look it up.',
     '5. Markdown (headings, lists, bold) is welcome where it improves structure and readability.',
     `6. **Language**: ${reportLanguageDirective(getConfig().reportLanguage)}`,
   ].join('\n');
@@ -1048,12 +1237,13 @@ export function setChatPapers(papers) {
 export function bindChatActions({ onSend }) {
   chatState.onSend = onSend;
   const includeBox = document.getElementById('chatIncludeImages');
+  includeBox.checked = chatState.includeSource;
   const sendBtn = document.getElementById('chatSendBtn');
   const clearBtn = document.getElementById('chatClearBtn');
   const input = document.getElementById('chatInput');
 
   includeBox.addEventListener('change', () => {
-    chatState.includeImages = includeBox.checked;
+    chatState.includeSource = includeBox.checked;
     refreshChatMonitor();
   });
   input.addEventListener('input', refreshChatMonitor);
@@ -1099,7 +1289,7 @@ function renderChatPaperList() {
       <input type="checkbox" data-idx="${idx}" ${chatState.selected.has(idx) ? 'checked' : ''} />
       <div>
         <span class="pp-name">${escapeText(p.filename)}</span>
-        <span class="pp-meta">${p.pageCount} pages · ${p.includedPages} analysed</span>
+        <span class="pp-meta">${escapeText(describeExtent(p))}</span>
       </div>
     `;
     item.querySelector('input').addEventListener('change', (e) => {
@@ -1118,23 +1308,23 @@ function buildContextText() {
     .map((i) => chatState.papers[i])
     .filter(Boolean);
   const instruction = chatSystemInstruction();
-  if (!selectedPapers.length) return { systemPrompt: instruction, images: [] };
-  const parts = [instruction, '', '=== Paper material ==='];
+  if (!selectedPapers.length) return { systemPrompt: instruction, sourceParts: [] };
+  const lines = [instruction, '', '=== Document material ==='];
   for (let i = 0; i < selectedPapers.length; i++) {
     const p = selectedPapers[i];
-    parts.push(`\n--- Paper ${i + 1}: ${p.filename} ---`);
-    parts.push(`${p.pageCount} pages total, ${p.includedPages} analysed`);
+    lines.push(`\n--- Document ${i + 1}: ${p.filename} ---`);
+    lines.push(describeExtent(p));
     for (const s of p.sectionsUsed) {
       const v = p.analysis?.[s.id];
       if (v === undefined || v === null || v === '') continue;
-      parts.push(`\n[${s.title}]`);
-      parts.push(typeof v === 'string' ? v : JSON.stringify(v));
+      lines.push(`\n[${s.title}]`);
+      lines.push(typeof v === 'string' ? v : JSON.stringify(v));
     }
   }
-  const images = chatState.includeImages
-    ? selectedPapers.flatMap((p) => p.pageImages || [])
+  const sourceParts = chatState.includeSource
+    ? selectedPapers.flatMap((p) => p.docParts || [])
     : [];
-  return { systemPrompt: parts.join('\n'), images };
+  return { systemPrompt: lines.join('\n'), sourceParts };
 }
 
 export function getChatContext() {
@@ -1146,12 +1336,12 @@ function refreshChatMonitor() {
   const limit = cfg.contextLimit || 128000;
   const input = document.getElementById('chatInput');
   const userText = input?.value || '';
-  const { systemPrompt, images } = buildContextText();
+  const { systemPrompt, sourceParts } = buildContextText();
   const turns = chatState.messages.map((m) => ({ role: m.role, text: m.text }));
-  // attach images to first synthesized turn for estimate parity with the actual send.
+  // attach the source document to a synthesized turn so the estimate matches the real send.
   const estTurns = [
     ...turns,
-    { role: 'user', text: userText, images },
+    { role: 'user', text: userText, parts: sourceParts },
   ];
   const est = estimateChatTokens(systemPrompt, estTurns);
   const estEl = document.getElementById('chatEstTokens');
@@ -1173,7 +1363,7 @@ function refreshChatMonitor() {
   if (warn) {
     if (est >= limit) {
       warn.hidden = false;
-      warn.textContent = `Estimated input is ${(est - limit).toLocaleString()} tokens over the context limit. Deselect some papers, turn off page images, or raise the limit.`;
+      warn.textContent = `Estimated input is ${(est - limit).toLocaleString()} tokens over the context limit. Deselect some documents, stop attaching the original document, or raise the limit.`;
     } else if (est >= limit * 0.85) {
       warn.hidden = false;
       warn.textContent = 'Approaching the context limit — keep an eye on the conversation length.';
@@ -1196,8 +1386,8 @@ function refreshChatMonitor() {
     const sel = chatState.selected.size;
     composerHint.textContent =
       sel === 0
-        ? 'Select at least one paper as context'
-        : `${sel} paper${sel > 1 ? 's' : ''} selected · Cmd/Ctrl + Enter to send`;
+        ? 'Select at least one document as context'
+        : `${sel} document${sel > 1 ? 's' : ''} selected · Cmd/Ctrl + Enter to send`;
   }
 }
 
@@ -1212,13 +1402,13 @@ async function submitChatMessage() {
 
   const typingEl = appendTypingBubble();
   try {
-    const { systemPrompt, images } = buildContextText();
+    const { systemPrompt, sourceParts } = buildContextText();
     const turns = [];
     for (let i = 0; i < chatState.messages.length; i++) {
       const m = chatState.messages[i];
       const isFirstUser = m.role === 'user' && turns.findIndex((t) => t.role === 'user') === -1;
-      if (isFirstUser && images.length) {
-        turns.push({ role: 'user', text: m.text, images });
+      if (isFirstUser && sourceParts.length) {
+        turns.push({ role: 'user', text: m.text, parts: sourceParts });
       } else {
         turns.push({ role: m.role, text: m.text });
       }
@@ -1253,7 +1443,7 @@ function renderChatMessages() {
   msgs.innerHTML = '';
   if (!chatState.messages.length) {
     msgs.innerHTML =
-      '<p class="empty-state">Ask your first question — for example, “What is the core equation of the method? Quote it from the paper.”</p>';
+      '<p class="empty-state">Ask your first question — for example, “What is the core equation of the method? Quote it from the document.”</p>';
     return;
   }
   chatState.messages.forEach((m) => {

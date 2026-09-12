@@ -13,6 +13,8 @@ const DEFAULT_CONFIG = {
   rememberKey: true,
   autoSuggestSections: false,
   reportLanguage: 'en',
+  // 建议阶段默认只读抽样（前几页 + 末几页 / 开头与结尾），勾上才整份文档送过去
+  suggestFullDoc: false,
 };
 
 /** 报告输出语言（界面固定英文，模型产出的语言由此项决定） */

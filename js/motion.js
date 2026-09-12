@@ -110,10 +110,11 @@ window.matchMedia('(min-width: 901px)').addEventListener?.('change', (e) => {
   if (e.matches) setNav(false);
 });
 
-// 侧栏底部的连接状态块 → Settings
-document.getElementById('connStatus')?.addEventListener('click', () => {
-  document.querySelector('.tab[data-view="settings"]')?.click();
-});
+// 侧栏底部的入口（Model & API 按钮、连接状态块）同样收起抽屉；
+// 视图切换本身由 main.js 绑定
+for (const id of ['openModelBtn', 'connStatus']) {
+  document.getElementById(id)?.addEventListener('click', () => setNav(false));
+}
 
 /* ---------------- 可关闭的提示条（关闭状态记在本机） ---------------- */
 
