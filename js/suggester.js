@@ -4,7 +4,7 @@
 import { getConfig, getSections, reportLanguageDirective } from './config.js';
 import { prepareCached, sampleParts } from './docProcessor.js';
 import { callLLM, estimateAnalysisTokens } from './llmClient.js';
-import { parseJsonLoose, runPool } from './analyzer.js';
+import { parseJsonLoose, runPool, JSON_BACKSLASH_RULE } from './analyzer.js';
 
 const CONCURRENCY = 3;
 
@@ -151,7 +151,8 @@ function buildSuggestPrompt({ language, existingSections, hasImages, sampleNote,
     '  ]',
     '}',
     '',
-    'Write plain JSON — no comments, no trailing commas. The `suggestions` array holds however many angles you decided on.',
+    'Write plain JSON — no comments, no trailing commas. The `suggestions` array holds however many angles you decided on. ' +
+      JSON_BACKSLASH_RULE,
     '',
     'Requirements on each `prompt` field (this is the important one):',
     '1. Write it as an instruction addressed to the analysing model, in the same register as a well-written analysis brief: one opening sentence stating what to produce, then 3-5 numbered, concrete requirements.',
@@ -247,7 +248,7 @@ function pickField(primary, fallback, key) {
 
 /**
  * 为单份文档生成候选阅读角度。
- * @returns {Promise<{docType:string, readerGoal:string, docSummary:string, sampled:boolean, items:Array, usage:object|null}>}
+ * @returns {Promise<{docType:string, readerGoal:string, docSummary:string, sampled:boolean, items:Array, truncated:boolean, usage:object|null}>}
  */
 export async function suggestForDocument(file, { full = false, onProgress } = {}) {
   const config = getConfig();
@@ -255,13 +256,14 @@ export async function suggestForDocument(file, { full = false, onProgress } = {}
   const prepared = await prepareCached(file, { maxPages: config.maxPages, onProgress });
   const { parts, sampled, note } = sampleParts(prepared.parts, { full });
   const hasImages = parts.some((p) => p.type === 'image');
-  const prompt = buildSuggestPrompt({
+  const promptArgs = {
     language: config.reportLanguage,
     existingSections: getSections().filter((s) => s.enabled),
     hasImages,
     sampleNote: note,
     filename: file.name,
-  });
+  };
+  const prompt = buildSuggestPrompt(promptArgs);
   const estimatedTokens = estimateAnalysisTokens(prompt, parts);
   onProgress?.({ stage: 'llm-calling', estimatedTokens, sampled });
   if (config.contextLimit && estimatedTokens > config.contextLimit) {
@@ -269,25 +271,23 @@ export async function suggestForDocument(file, { full = false, onProgress } = {}
       `Estimated input of ${estimatedTokens.toLocaleString()} tokens exceeds the configured context limit of ${config.contextLimit.toLocaleString()}. Turn off "use the full document", lower the max page count, or raise the limit in Model & API.`,
     );
   }
+  /* 解析失败和「解析出来一条都不能用」是同一件事的两种表现，重问一次对两者都可能有用。
+     所以这里把 parseJsonLoose 的异常收下来当成一次空结果——让它直接抛出去的话，
+     整段回复没能解析（模型先讲了一通思路、或者被截断得太狠）这条最常见的路径
+     反而永远轮不到重试，而那恰恰是重试最该管的情况。 */
   const ask = async (retry) => {
-    const body = retry
-      ? buildSuggestPrompt({
-          language: config.reportLanguage,
-          existingSections: getSections().filter((s) => s.enabled),
-          hasImages,
-          sampleNote: note,
-          filename: file.name,
-          retry: true,
-        })
-      : prompt;
+    const body = retry ? buildSuggestPrompt({ ...promptArgs, retry: true }) : prompt;
     const { text, usage, truncated, reasoningOnly } = await callLLM(config, body, parts, { json: true });
-    const parsed = parseJsonLoose(text, { hitOutputLimit: truncated, reasoningOnly });
-    return { parsed, items: normalizeSuggestions(parsed.suggestions), text, usage, truncated };
+    try {
+      const parsed = parseJsonLoose(text, { hitOutputLimit: truncated, reasoningOnly });
+      return { parsed, items: normalizeSuggestions(parsed.suggestions), text, usage, truncated };
+    } catch (error) {
+      return { parsed: null, items: [], text, usage, truncated, error };
+    }
   };
 
   const first = await ask(false);
-  let { parsed, items, text, truncated } = first;
-  let usage = first.usage;
+  let { parsed, items, text, truncated, usage, error } = first;
 
   // 给几条由模型自己定，不足不补；只有一条可用的都没有才重问一次
   if (!items.length) {
@@ -296,17 +296,20 @@ export async function suggestForDocument(file, { full = false, onProgress } = {}
     usage = sumUsage(usage, second.usage);
     if (second.items.length) {
       items = second.items;
+      error = null;
       parsed = {
         doc_type: pickField(parsed, second.parsed, 'doc_type'),
         reader_goal: pickField(parsed, second.parsed, 'reader_goal'),
         doc_summary: pickField(parsed, second.parsed, 'doc_summary'),
       };
     } else {
-      ({ parsed, text, truncated } = second);
+      ({ parsed, text, truncated, error } = second);
     }
   }
 
   if (!items.length) {
+    // 两次都没能解析出 JSON：原样抛出解析器写好的那条诊断，它比这里能说的具体得多
+    if (error) throw error;
     const cut = truncated
       ? ' The reply was cut off at the output limit before the angles were written — raise “Max output tokens” in Model & API.'
       : '';
@@ -324,6 +327,8 @@ export async function suggestForDocument(file, { full = false, onProgress } = {}
     docSummary: pickField(parsed, null, 'doc_summary'),
     sampled,
     items,
+    // 截断往往正好砍在角度列表中间：救回来几条是几条，但得让界面说清楚这不是模型的完整答案
+    truncated: Boolean(truncated),
     usage: usage || null,
   };
 }

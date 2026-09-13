@@ -8,16 +8,36 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 /* 端点拒绝大额度、报错里又没写明上限时退回的保守值 */
 const SAFE_MAX_OUTPUT_TOKENS = 8192;
 
+const MIN_OUTPUT_TOKENS = 512;
+const MAX_OUTPUT_TOKENS = 200000;
+
+/**
+ * 把用户填的输出上限夹进可用区间。0 / 留空 / 非法值返回 0，表示「用默认值」。
+ * 上下界只能有一个主人：界面若自己只夹下界，填 9999999 就会被原样存进配置、
+ * 存进档案、再回填进输入框，而实际发出去的永远是 200000——显示的和用的不是一回事。
+ */
+export function clampOutputTokens(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(Math.max(Math.round(n), MIN_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS);
+}
+
 /** 用户没填就用默认值；夹在一个合理区间里，免得手滑填个 10 让每次请求都被截断 */
 function outputBudget(config) {
-  const n = Number(config?.maxOutputTokens);
-  if (!Number.isFinite(n) || n <= 0) return DEFAULT_MAX_OUTPUT_TOKENS;
-  return Math.min(Math.max(Math.round(n), 512), 200000);
+  return clampOutputTokens(config?.maxOutputTokens) || DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
 /** 各家对「输出被 max_tokens 砍断」的叫法 */
 function isLengthFinish(reason) {
   return /^(length|max_tokens|model_length|output_limit)$/i.test(String(reason || ''));
+}
+
+function anthropicHeaders(apiKey) {
+  return {
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true',
+  };
 }
 
 function joinUrl(base, path) {
@@ -52,13 +72,17 @@ async function postJson(url, headers, body) {
   const text = await res.text();
   if (!res.ok) {
     let detail = text;
+    let parsed = null;
     try {
-      const obj = JSON.parse(text);
-      detail = obj.error?.message || obj.message || text;
+      parsed = JSON.parse(text);
+      detail = parsed.error?.message || parsed.message || text;
     } catch {}
     const err = new Error(`HTTP ${res.status}: ${detail.slice(0, 400)}`);
     err.status = res.status;
     err.detail = detail;
+    // 整个错误体也留着：各家在 error.param / error.code 里直接点名是哪个参数出的问题，
+    // 这个结构化信号比去猜英文措辞可靠得多（见 looksLikeJsonModeRejection）
+    err.body = parsed;
     throw err;
   }
   try {
@@ -170,10 +194,17 @@ function endpointKey({ apiUrl, model }) {
 
 function looksLikeJsonModeRejection(err) {
   if (!err || !(err.status >= 400 && err.status < 500)) return false;
+  // 服务商多半在错误体里直接点名是哪个参数（OpenAI 的 error.param / error.code），
+  // 有这个结构化信号就别去猜英文措辞——各家文案不同，中文网关根本不出现 unsupported
+  const param = String(err.body?.error?.param || '');
+  if (param) return /response_format/i.test(param);
   const text = String(err.detail || err.message || '');
   // "Unsupported parameter: max_tokens…" 也含 unsupported，但那是额度的事，别记错账
   if (/max[_ ]?(completion[_ ]?)?tokens/i.test(text)) return false;
-  return /response_format|json[_ ]?object|json[_ ]?schema|json mode|unsupported|unrecognized|unknown (parameter|field|argument)/i.test(
+  // 光凭一个 unsupported / unrecognized 不能算数：'Unsupported value: temperature…'
+  // 'Unsupported image media type…' 'unsupported model…' 都会撞上，一旦误判就会把
+  // 一个其实支持 JSON 模式的端点永久记成不支持，还白发一次整份文档。必须点到 JSON 这件事上。
+  return /response_format|json[_ ]?object|json[_ ]?schema|json mode|(unsupported|unrecognized|unknown)[^.]{0,40}\bjson\b/i.test(
     text,
   );
 }
@@ -183,19 +214,33 @@ function looksLikeJsonModeRejection(err) {
 const maxTokensCap = new Map();
 const maxTokensRenamed = new Set();
 
+/* 报错里提到 max_tokens，但说的其实是输入太长 / 上下文窗口 / 限流额度——
+   这类句子里的数字是提示词长度、窗口大小或每分钟配额，不是这个模型的输出上限。
+   拿它们当上限记进 maxTokensCap，会把端点永久锁在一个荒唐的小值上，
+   而 applyOutputBudget 取的是 min(cap, 用户设置)，界面上再怎么调都不起作用。 */
+const ABOUT_INPUT = /context (window|length|limit|budget)|input length|prompt (is|already|length)|per (min|day)|rate limit|TPM|TPD/i;
+/* 「给大了」的措辞——只有确实在说超限，才允许在报错没写明数字时对半砍 */
+const TOO_LARGE = /too (large|big|high)|exceed|greater than|at most|must be (<=|less|below|no more)|maximum|上限|超(过|出)/i;
+
 function maxTokensRejection(err, current) {
   if (!err || !(err.status >= 400 && err.status < 500)) return null;
   const text = String(err.detail || err.message || '');
   if (!/max[_ ]?(completion[_ ]?)?tokens/i.test(text)) return null;
-  if (/max_completion_tokens/i.test(text)) return { rename: true };
+  // 新版接口把参数改叫 max_completion_tokens。这个信号和「额度给大了」是两件事，
+  // 同一句话可能两件都占（"max_completion_tokens is too large: 32768…"），所以不能
+  // 一看见这个名字就早退——早退会让下面的取上限永远轮不到，改过名的端点就此卡死
+  const rename = /max_completion_tokens/i.test(text) ? { rename: true } : null;
+  if (ABOUT_INPUT.test(text)) return rename;
   // 报错里通常直接写着这个模型允许的上限，取其中比当前值小的最大数字；
   // 认不出来就对半砍——32768 → 8192 → 4096 两步就能罩住常见的真实上限，
   // 而每多试一次都要把整份文档（含页面图片）重发一遍，不能慢慢试
   const found = (text.match(/\d{3,7}/g) || []).map(Number).filter((n) => n >= 256 && n < current);
   const limit = found.length
     ? Math.max(...found)
-    : Math.min(SAFE_MAX_OUTPUT_TOKENS, Math.floor(current / 2));
-  return limit >= 256 ? { limit } : null;
+    : TOO_LARGE.test(text)
+      ? Math.min(SAFE_MAX_OUTPUT_TOKENS, Math.floor(current / 2))
+      : 0;
+  return limit >= 256 ? { ...rename, limit } : rename;
 }
 
 /** 带自愈的 POST：JSON 模式与输出额度被拒时各修一次，修不动就把原始错误抛出去 */
@@ -209,18 +254,22 @@ async function postChat(url, headers, body, key) {
       // 还会把一个其实支持 JSON 模式的端点记成不支持
       const current = body.max_tokens ?? body.max_completion_tokens;
       const fix = maxTokensRejection(err, current);
+      // 改名与降额各自独立地判一次：一条报错可能两件事都要求，而改过名之后
+      // 再收到「还是太大」时，降额这一支必须仍然能生效
+      let changed = false;
       if (fix?.rename && !('max_completion_tokens' in body)) {
         maxTokensRenamed.add(key);
         body.max_completion_tokens = current;
         delete body.max_tokens;
-        continue;
+        changed = true;
       }
       if (fix?.limit) {
         maxTokensCap.set(key, fix.limit);
         if ('max_completion_tokens' in body) body.max_completion_tokens = fix.limit;
         else body.max_tokens = fix.limit;
-        continue;
+        changed = true;
       }
+      if (changed) continue;
       if (body.response_format && looksLikeJsonModeRejection(err)) {
         jsonModeUnsupported.add(key);
         delete body.response_format;
@@ -276,28 +325,18 @@ async function callAnthropic(config, prompt, parts, { json = false } = {}) {
   // Anthropic 没有 response_format，改用 assistant 预填：让模型从 `{` 续写，
   // 「先写一段开场白」这条路就走不通了
   if (json) messages.push({ role: 'assistant', content: [{ type: 'text', text: '{' }] });
-  const body = {
-    model,
-    max_tokens: outputBudget(config),
-    temperature: 0.5,
-    messages,
-  };
-  const data = await postJson(
-    url,
-    {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body,
-  );
+  const key = endpointKey(config);
+  const body = applyOutputBudget({ model, temperature: 0.5, messages }, config, key);
+  const data = await postChat(url, anthropicHeaders(apiKey), body, key);
   let text = pickAnthropicText(data.content);
-  // 预填的 `{` 不在回复里，得补回去；若网关忽略了预填、回复已自带开头就别重复补
-  if (json && !/^\s*(\{|```)/.test(text)) text = '{' + text;
+  // 预填的 `{` 不在回复里，得补回去；若网关忽略了预填、回复已自带开头就别重复补。
+  // 正文整个是空的（额度全烧在 thinking 块里）时也不能补——补出来的 `{` 会被修成 `{}`，
+  // 越过「模型什么都没返回」这道检查，最后渲染成一张没有任何提示的空白报告
+  if (json && text.trim() && !/^\s*(\{|```)/.test(text)) text = '{' + text;
   return {
     text,
     usage: normalizeAnthropicUsage(data.usage),
-    truncated: data.stop_reason === 'max_tokens',
+    truncated: isLengthFinish(data.stop_reason),
   };
 }
 
@@ -357,9 +396,11 @@ async function chatOpenAI(config, systemPrompt, turns) {
   const key = endpointKey(config);
   const body = applyOutputBudget({ model, messages, temperature: 0.5 }, config, key);
   const data = await postChat(url, { Authorization: `Bearer ${apiKey}` }, body, key);
+  const choice = data.choices?.[0];
   return {
-    text: pickOpenAIText(data.choices?.[0]?.message).text,
+    text: pickOpenAIText(choice?.message).text,
     usage: normalizeOpenAIUsage(data.usage),
+    truncated: isLengthFinish(choice?.finish_reason ?? choice?.native_finish_reason),
   };
 }
 
@@ -374,25 +415,14 @@ async function chatAnthropic(config, systemPrompt, turns) {
       messages.push({ role: t.role, content: [{ type: 'text', text: t.text || '' }] });
     }
   }
-  const body = {
-    model,
-    max_tokens: outputBudget(config),
-    temperature: 0.5,
-    messages,
-  };
+  const key = endpointKey(config);
+  const body = applyOutputBudget({ model, temperature: 0.5, messages }, config, key);
   if (systemPrompt) body.system = systemPrompt;
-  const data = await postJson(
-    url,
-    {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body,
-  );
+  const data = await postChat(url, anthropicHeaders(apiKey), body, key);
   return {
     text: pickAnthropicText(data.content),
     usage: normalizeAnthropicUsage(data.usage),
+    truncated: isLengthFinish(data.stop_reason),
   };
 }
 

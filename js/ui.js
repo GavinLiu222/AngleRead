@@ -13,7 +13,7 @@ import {
   reportLanguageDirective,
   isConfigReady,
 } from './config.js';
-import { estimateChatTokens, fetchModelList } from './llmClient.js';
+import { estimateChatTokens, fetchModelList, clampOutputTokens } from './llmClient.js';
 import { API_PRESETS, MODEL_PRESETS, guessProviderKey, modelVisionSupport } from './presets.js';
 import { SUPPORTED_ACCEPT, isSupportedFile, unsupportedReason, fileKind } from './docProcessor.js';
 
@@ -512,6 +512,10 @@ export function bindModelActions({ onSaved }) {
     });
     document.getElementById('deleteProfileBtn').disabled = false;
     renderConnectionStatus();
+    // 这里和 Save 一样是一次完整的配置写入，跟着变的东西也得一样：
+    // 上下文上限换了 Chat 的占比条与 Send 按钮要重算，模型换了 Upload 页的视觉提示要重判
+    refreshChatMonitor();
+    refreshVisionWarning();
     toast(`Switched to “${p.name}”`, 'success');
   });
 
@@ -575,9 +579,9 @@ export function bindModelActions({ onSaved }) {
     // 留空（或填 0 / 非法值）= 0 = 不做本地上限检查，交给模型自己的上限
     const contextParsed = parseInt(document.getElementById('contextLimit').value, 10);
     const contextLimit = Number.isFinite(contextParsed) && contextParsed > 0 ? Math.max(1000, contextParsed) : 0;
-    // 留空 = 0 = 回到默认的 8192
-    const outputParsed = parseInt(document.getElementById('maxOutputTokens').value, 10);
-    const maxOutputTokens = Number.isFinite(outputParsed) && outputParsed > 0 ? Math.max(512, outputParsed) : 0;
+    // 留空 = 0 = 回到 llmClient 的默认值（DEFAULT_MAX_OUTPUT_TOKENS）。
+    // 上下界统一由 clampOutputTokens 说了算，免得界面只夹下界、发出去的又是另一个数
+    const maxOutputTokens = clampOutputTokens(document.getElementById('maxOutputTokens').value);
     const rememberKey = document.getElementById('rememberKey').checked;
     const needKey = apiFormat !== 'ollama';
     if (!apiUrl || !model || (needKey && !apiKey)) {
@@ -599,6 +603,10 @@ export function bindModelActions({ onSaved }) {
       rememberKey,
     });
     rememberProfile(next);
+    // 夹过界的值回填进输入框：框里显示的必须就是真正会发出去的那个数，
+    // 否则填了 9999999 的人会一直以为自己设的是 9999999
+    document.getElementById('contextLimit').value = next.contextLimit || '';
+    document.getElementById('maxOutputTokens').value = next.maxOutputTokens || '';
     renderProfiles();
     renderConnectionStatus();
     updateVisionHint();
@@ -817,17 +825,27 @@ export function renderFocusSuggestions(docs, { onToggle, onRetry, onSuggest } = 
     return;
   }
 
-  // 一条角度都还没有时，把"开始"做成这一栏里的主按钮，不让用户去猜该点哪里
+  // 还有文档没扫过时就把"开始"做成这一栏里的主按钮，不让用户去猜该点哪里。
+  // 判据是「有没有没扫过的文档」而不是「有没有角度」：先扫了 A 再添一份 B 的话，
+  // 按后者算按钮会消失，而 idle 的 B 自己那一栏又只有一行说明、没有任何可点的东西，
+  // 用户只剩 Re-suggest 一条路——那会连 A 一起重扫，把已经勾好的角度清空
   const busy = list.some((d) => d.status === 'working' || d.status === 'pending');
-  if (!list.some((d) => d.items?.length)) {
+  const pendingDocs = list.filter((d) => !d.items?.length && d.status !== 'error');
+  if (pendingDocs.length) {
     const cta = document.createElement('div');
     cta.className = 'actions';
     const btn = document.createElement('button');
     btn.className = 'primary';
     btn.id = 'suggestFocusBtn';
-    btn.textContent = busy ? 'Reading the documents…' : 'Suggest focus angles';
+    // 已经有文档扫过了，就只扫剩下那几份——重扫已有的既费钱，又会清掉勾选
+    const partial = pendingDocs.length < list.length;
+    btn.textContent = busy
+      ? 'Reading the documents…'
+      : partial
+        ? `Suggest focus angles for ${pendingDocs.length} new document${pendingDocs.length > 1 ? 's' : ''}`
+        : 'Suggest focus angles';
     btn.disabled = busy;
-    btn.addEventListener('click', () => onSuggest?.());
+    btn.addEventListener('click', () => onSuggest?.(pendingDocs.map((d) => d.file)));
     cta.appendChild(btn);
     root.appendChild(cta);
   }
@@ -885,6 +903,15 @@ export function renderFocusSuggestions(docs, { onToggle, onRetry, onSuggest } = 
         .filter(Boolean)
         .join(' ');
       group.appendChild(note);
+    }
+
+    // 截断常常正好砍在角度列表中间：救回来的几条照常显示，但别让它们看着像模型的完整答案
+    if (doc.truncated) {
+      const warn = document.createElement('p');
+      warn.className = 'notice-block';
+      warn.textContent =
+        'The model ran out of output room while writing these angles, so the list may be cut short. Raise “Max output tokens” in Model & API, then hit Re-suggest to see the rest.';
+      group.appendChild(warn);
     }
 
     doc.items.forEach((item) => {
@@ -1501,9 +1528,9 @@ async function submitChatMessage() {
         turns.push({ role: m.role, text: m.text });
       }
     }
-    const { text: replyText, usage } = await chatState.onSend({ systemPrompt, turns });
+    const { text: replyText, usage, truncated } = await chatState.onSend({ systemPrompt, turns });
     chatState.lastUsage = usage || null;
-    chatState.messages.push({ role: 'assistant', text: replyText });
+    chatState.messages.push({ role: 'assistant', text: replyText, truncated: Boolean(truncated) });
     typingEl.remove();
     renderChatMessages();
   } catch (err) {
@@ -1544,6 +1571,14 @@ function renderChatMessages() {
     const bubble = wrap.querySelector('.bubble');
     if (m.role === 'assistant' && !m.error) {
       renderRichContent(m.text || '', bubble);
+      // 半句话就停住的回答，得说清楚是额度用完了而不是模型只想说这么多
+      if (m.truncated) {
+        const warn = document.createElement('p');
+        warn.className = 'notice-block';
+        warn.textContent =
+          'This answer hit the output limit and stops mid-way. Raise “Max output tokens” in Model & API, or ask for a narrower slice of the question.';
+        bubble.appendChild(warn);
+      }
     } else {
       bubble.textContent = m.text || '';
     }

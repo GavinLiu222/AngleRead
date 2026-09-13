@@ -67,6 +67,7 @@ function syncDocs() {
         readerGoal: '',
         docSummary: '',
         sampled: false,
+        truncated: false,
         items: [],
         selected: new Set(),
         error: '',
@@ -90,7 +91,8 @@ function renderFocus() {
       const doc = state.docs[docIdx];
       if (doc) runSuggestions([doc.file]);
     },
-    onSuggest: () => runSuggestions(state.files.slice()),
+    // 没扫过的那几份文档由 UI 传进来；没传就是整批（Re-suggest）
+    onSuggest: (files) => runSuggestions(files?.length ? files : state.files.slice()),
   });
 }
 
@@ -149,6 +151,7 @@ async function runSuggestions(files) {
       doc.docSummary = payload.docSummary;
       doc.sampled = payload.sampled;
       doc.items = payload.items;
+      doc.truncated = Boolean(payload.truncated);
       doc.selected = new Set();
       doc.error = '';
       renderFocus();

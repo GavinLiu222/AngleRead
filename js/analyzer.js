@@ -16,7 +16,22 @@ export async function runPool(items, limit, fn) {
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
 }
 
-/** 模型偶尔会加代码围栏或前后缀，逐层退让地解析 JSON（suggester 也在用） */
+/* 一个 `$` 该不该开数学环境，看这段字符串里后面还有没有配对的 `$`：
+   "成本 $5，随后……" 这种落单的货币符号若开了数学环境，同一段里真正的 `\n`
+   换行就会被当成 LaTeX 命令双写掉，界面上显示成字面的 \n。 */
+function hasClosingDollar(raw, from) {
+  for (let i = from; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === '\\') {
+      i++; // 跳过整个转义对，别把 \" 误认成串尾
+      continue;
+    }
+    if (ch === '"') return false; // 字符串结束了也没配上
+    if (ch === '$') return true;
+  }
+  return false;
+}
+
 /* 模型输出的 JSON 有两种常见的坏法，都不是「模型不听话」而是格式本身容易踩的坑：
    1. 字符串里写 LaTeX —— `$\Delta$` / `$\text{IC}$` 里的反斜杠不是合法的 JSON 转义，
       `\t` 甚至会被悄悄解释成制表符。我们要求模型用 LaTeX 写公式，这几乎必然发生。
@@ -31,8 +46,11 @@ function repairJsonText(raw) {
     const ch = raw[i];
     if (inString) {
       if (ch === '$') {
-        inMath = !inMath;
-        out += ch;
+        const double = raw[i + 1] === '$'; // `$$…$$` 两个符号只算一次开合
+        out += double ? '$$' : '$';
+        if (double) i++;
+        // 只有后面还有配对的 `$` 才进数学环境：落单的货币符号不能把剩下半句都拖进去
+        inMath = inMath ? false : hasClosingDollar(raw, i + 1);
         continue;
       }
       if (ch === '\\') {
@@ -111,14 +129,16 @@ function repairJsonText(raw) {
 /* 更阴险的一种坏法：LaTeX 命令的首字母恰好是合法的 JSON 转义符——
    `\text` `\times` `\tau` 会被解析成制表符，`\nabla` `\neq` 成换行，`\beta` `\bar` 成退格，
    `\frac` `\forall` 成换页，`\rho` `\right` 成回车。这种 JSON **能解析成功**，
-   只是内容被悄悄毁掉，所以必须在 JSON.parse 之前先补一道反斜杠。 */
-const LATEX_CMD_AFTER_ESCAPE =
-  /\\(textbf|textit|text|times|tau|theta|tilde|tfrac|nabla|neq|beta|bar|binom|begin|boldsymbol|bmatrix|frac|forall|rho|rightarrow|right|rangle)(?![a-zA-Z])/g;
+   只是内容被悄悄毁掉，所以必须在 JSON.parse 之前先补一道反斜杠。
+   规则要写成通用的而不是一张命令清单：数学环境里 `\` 后面跟字母就是 LaTeX 命令，
+   不必也不可能把 `\to` `\tanh` `\nu` `\bullet` `\rm` 这类名字一个个数全。 */
+const LATEX_CMD_AFTER_ESCAPE = /\\([a-zA-Z]+)/g;
 
 /* 只在 `$...$` / `$$...$$` 里动手。散文里 "…\ntop 10 holdings" 的 `\n` 是真换行，
    不是 `\top`——限定在数学环境内可以避开这类误伤（我们的 prompt 也要求公式写在 $ 里）。
-   行内公式还要求「里面至少有一个 \命令」且不太长，免得把 "$42 vs $38" 这种货币区间当成公式。 */
-const MATH_SPAN = /\$\$[\s\S]{1,800}?\$\$|\$[^$\n]{0,200}?\\[a-zA-Z][^$\n]{0,200}?\$/g;
+   行内公式还要求「里面至少有一个 \命令」且不太长，免得把 "$42 vs $38" 这种货币区间当成公式；
+   开头紧跟数字的（`$42.…$`）一律当货币，公式极少以裸数字起头，而金额几乎总是。 */
+const MATH_SPAN = /\$\$[\s\S]{1,800}?\$\$|\$(?!\d)[^$\n]{0,200}?\\[a-zA-Z][^$\n]{0,200}?\$/g;
 
 function fixLatexEscapes(text) {
   const s = String(text);
@@ -195,7 +215,6 @@ export function parseJsonLoose(text, { hitOutputLimit = false, reasoningOnly = f
     (c) => JSON.parse(c),
     (c) => JSON.parse(repairJsonText(fixLatexEscapes(c))),
   ];
-  let fallback; // 解析成功但空洞的结果：全都没戏时才拿它顶上
   // 外层必须是候选、内层才是解析方式：候选已按可信度排好，而「整段回复修一修能读」
   // 永远优于「里面某个子对象恰好能严格解析」。反过来写的话，一份写到一半被截断的
   // 回复会被它内部某条 suggestion 抢先解析成功，最外层的 doc_type / suggestions 全丢。
@@ -207,11 +226,12 @@ export function parseJsonLoose(text, { hitOutputLimit = false, reasoningOnly = f
       } catch {
         continue;
       }
+      // `{}` / `null` / 数组 / 标量都不算解析出了东西：返回它们只会让界面渲染出
+      // 一张空白卡片（还标着 done），或者在调用方 `parsed.suggestions` 处抛一个
+      // 没头没脑的 TypeError。宁可走下面那条写清楚了原因的报错。
       if (usableObject(value)) return value;
-      if (fallback === undefined) fallback = value;
     }
   }
-  if (fallback !== undefined) return fallback;
 
   const shown = raw.length > 400 ? raw.slice(0, 240) + ' […] ' + raw.slice(-120) : raw;
   const startedJson = /\{\s*"/.test(raw);
@@ -234,6 +254,11 @@ export function parseJsonLoose(text, { hitOutputLimit = false, reasoningOnly = f
   }
   throw new Error('Could not parse the JSON returned by the model.' + cut + ' Raw output: ' + shown);
 }
+
+/* 公式写在 JSON 字符串里必踩的坑。分析和猜角度两份 prompt 都要求模型写 LaTeX，
+   所以两边都得说这句——抽成一个常量，免得改了一边忘了另一边。 */
+export const JSON_BACKSLASH_RULE =
+  'Note that backslashes in LaTeX commands must be **double-escaped** inside a JSON string (write `\\\\alpha`, not `\\alpha`), otherwise JSON parsing fails.';
 
 function buildPrompt(sections, { autoSuggest, language, hasImages, docType } = {}) {
   const lines = sections.map((s, i) => `${i + 1}. "${s.id}" (${s.title}): ${s.prompt}`);
@@ -270,7 +295,8 @@ function buildPrompt(sections, { autoSuggest, language, hasImages, docType } = {
     'Output format and style:',
     firstFormatRule,
     '2. **Depth and logic**: develop each section according to the specific instructions attached to it — detailed, accurate and logically ordered. Prefer a "conclusion first, then the supporting argument" structure so causality and progression stay clear. Ground every judgement in concrete evidence from the document (terminology, names, dataset or ticker names, numbers, page or section references) and avoid filler. Stay strictly faithful to the document: when it does not supply enough information, say so rather than speculating, and when you make an inference that goes beyond what the document states, mark it explicitly as your own analysis. Let length follow information density — do not sacrifice substance for brevity.',
-    '3. **Mathematics**: whenever a derivation, loss function, valuation formula or non-trivial expression is involved, give the LaTeX — inline `$...$`, display `$$...$$`. Note that backslashes in LaTeX commands must be **double-escaped** inside a JSON string (write `\\\\alpha`, not `\\alpha`), otherwise JSON parsing fails.',
+    '3. **Mathematics**: whenever a derivation, loss function, valuation formula or non-trivial expression is involved, give the LaTeX — inline `$...$`, display `$$...$$`. ' +
+      JSON_BACKSLASH_RULE,
     '4. **Tables**: use Markdown table syntax (`| col1 | col2 |\\n|---|---|\\n| ... |`) for structured information such as result comparisons, forecast and valuation breakdowns, hyper-parameter lists and metric breakdowns.',
     figureRule,
     '6. **Markdown elements**: bullets `- `, sub-headings `### `, bold `**...**` and inline code `` ` ` `` are all available to improve structure and readability.',

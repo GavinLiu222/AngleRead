@@ -209,17 +209,19 @@ export const MODEL_PRESETS = [
   },
 ];
 
-/* 已知的纯文本模型家族。只写有把握的规则——误报会让提示变成噪音，
-   拿不准时返回 'unknown'，界面就不提示。 */
+/* 已知的纯文本模型。只写有把握的规则——误报会让提示变成噪音，
+   拿不准时返回 'unknown'，界面就不提示。
+
+   这里曾经按家族名整片地猜（mistral / qwen / glm-4 / llama / gemma / phi / yi…），
+   但这些家族后来陆续出了多模态版本，规则就成了反的：glm-4.5v、llama-4-scout、
+   gemma-3、phi-4-multimodal、mistral-small-3.2、qwen3-omni 全被判成读不了图，
+   于是用户会在三个地方被告知「你的 PDF 会是空的」，而实际上人家读得好好的。
+   按名字猜家族这条路走不通——每出一代模型就得回来改一次，改慢了就是误报。
+   所以只留下确有把握的个例，其余交给 MODEL_PRESETS 里人工标注的 `vision: false`；
+   都没命中就老实返回 'unknown'，界面不提示。 */
 const TEXT_ONLY_HINTS = [
-  /^deepseek-v4-pro/,                      // DeepSeek 只有 V4-Pro 不读图，Flash 读图
+  /^deepseek-v4-pro/, // DeepSeek 只有 V4-Pro 不读图，Flash 读图
   /^gpt-3\.5/,
-  /^(mistral|mixtral|ministral|codestral)/, // Mistral 的视觉线叫 pixtral
-  /^qwen(?!.*vl)/,                         // 通义只有 *-vl-* 支持视觉
-  /^glm-4(?!v)/,                           // 智谱视觉模型带 v
-  /^moonshot(?!.*vision)/,
-  /llama(?!.*vision)/,                     // Llama 只有 *-vision 读图
-  /^(gemma|phi|yi-(?!vl)|baichuan|nemotron)/,
 ];
 
 /**
