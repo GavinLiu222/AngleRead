@@ -14,7 +14,7 @@ import {
   isConfigReady,
 } from './config.js';
 import { estimateChatTokens, fetchModelList } from './llmClient.js';
-import { API_PRESETS, MODEL_PRESETS, guessProviderKey } from './presets.js';
+import { API_PRESETS, MODEL_PRESETS, guessProviderKey, modelVisionSupport } from './presets.js';
 import { SUPPORTED_ACCEPT, isSupportedFile, unsupportedReason, fileKind } from './docProcessor.js';
 
 const VIEWS = ['upload', 'plan', 'results', 'chat', 'model'];
@@ -89,7 +89,9 @@ export function renderModelView() {
   document.getElementById('apiKey').value = cfg.apiKey;
   document.getElementById('apiFormat').value = cfg.apiFormat;
   document.getElementById('modelName').value = cfg.model;
-  document.getElementById('contextLimit').value = cfg.contextLimit;
+  // 0 表示「不设上限，交给模型自己」——输入框留空
+  document.getElementById('contextLimit').value = cfg.contextLimit || '';
+  document.getElementById('maxOutputTokens').value = cfg.maxOutputTokens || '';
   document.getElementById('rememberKey').checked = cfg.rememberKey;
   renderProfiles();
   updateProviderUI();
@@ -129,7 +131,8 @@ function applyProfileToForm(p) {
   document.getElementById('apiKey').value = p.apiKey || '';
   document.getElementById('apiFormat').value = p.apiFormat || 'openai';
   document.getElementById('modelName').value = p.model || '';
-  if (p.contextLimit) document.getElementById('contextLimit').value = p.contextLimit;
+  document.getElementById('contextLimit').value = p.contextLimit || '';
+  document.getElementById('maxOutputTokens').value = p.maxOutputTokens || '';
   updateProviderUI();
   renderModelChips([]);
 }
@@ -143,6 +146,48 @@ function updateProviderUI() {
   if (ollamaHint) ollamaHint.hidden = !isOllama;
   if (isOllama && !urlInput.value.trim()) urlInput.value = 'http://localhost:11434';
   keyInput.placeholder = isOllama ? 'Local Ollama needs no API key' : 'sk-...';
+  updateVisionHint();
+}
+
+/* ---------------- 纯文本模型提醒 ----------------
+   PDF 与图片是逐页渲染成图片喂给模型的，纯文本模型只会返回空章节。
+   模型确定不支持视觉时才提示，拿不准（modelVisionSupport → 'unknown'）就不打扰。 */
+
+/** 当前表单里选的模型是否已知不支持视觉 */
+function modelIsTextOnly() {
+  const el = document.getElementById('modelName');
+  return !!el && modelVisionSupport(el.value) === 'no';
+}
+
+/** Model & API 页：模型输入框下方的提示 */
+function updateVisionHint() {
+  const hint = document.getElementById('visionHint');
+  if (hint) hint.hidden = !modelIsTextOnly();
+}
+
+const VISION_KINDS = new Set(['pdf', 'image']);
+
+/** Upload 页：排队文件里有 PDF / 图片、而配置的模型读不了图时才提示 */
+export function refreshVisionWarning(files = uploadFiles) {
+  const box = document.getElementById('uploadVisionWarn');
+  if (!box) return;
+  const cfg = getConfig();
+  const blocked = (files || []).filter((f) => VISION_KINDS.has(fileKind(f)));
+  if (!blocked.length || modelVisionSupport(cfg.model) !== 'no') {
+    box.hidden = true;
+    return;
+  }
+  const pdfs = blocked.filter((f) => fileKind(f) === 'pdf').length;
+  const images = blocked.length - pdfs;
+  const what = [
+    pdfs ? `${pdfs} PDF${pdfs > 1 ? 's' : ''}` : '',
+    images ? `${images} image${images > 1 ? 's' : ''}` : '',
+  ].filter(Boolean).join(' and ');
+  box.innerHTML =
+    `<strong>${escapeText(cfg.model)} has no vision input</strong>, so the ${escapeText(what)} in this list ` +
+    'will come back empty — PDF pages and images are sent to the model as page images. ' +
+    'Switch to a vision-capable model in <strong>Model &amp; API</strong>, or keep only Word, Markdown and plain-text documents.';
+  box.hidden = false;
 }
 
 function renderModelChips(models) {
@@ -163,6 +208,7 @@ function renderModelChips(models) {
     chip.addEventListener('click', () => {
       document.getElementById('modelName').value = name;
       box.querySelectorAll('.model-chip').forEach((c) => c.classList.toggle('active', c === chip));
+      updateVisionHint();
     });
     box.appendChild(chip);
   });
@@ -242,7 +288,8 @@ function initPresetCombos() {
       groups.sort((a, b) => Number(b.key === active) - Number(a.key === active));
       return groups;
     },
-    footNote: 'Vision-capable models only — this tool feeds the model page images. Any model id can also be typed by hand.',
+    footNote: 'Mostly vision-capable models — PDFs and images are fed as page images; entries marked no vision read Word, Markdown and plain text only. Any model id can also be typed by hand.',
+    onPick: () => updateVisionHint(),
   });
 }
 
@@ -460,7 +507,8 @@ export function bindModelActions({ onSaved }) {
       apiKey: p.apiKey || '',
       apiFormat: p.apiFormat || 'openai',
       model: p.model || '',
-      contextLimit: p.contextLimit || cfg.contextLimit,
+      contextLimit: p.contextLimit || 0,
+      maxOutputTokens: p.maxOutputTokens || 0,
     });
     document.getElementById('deleteProfileBtn').disabled = false;
     renderConnectionStatus();
@@ -478,6 +526,9 @@ export function bindModelActions({ onSaved }) {
     renderProfiles();
     toast('Profile deleted');
   });
+
+  // 手输模型名时也要更新「这个模型读不了图」的提示
+  document.getElementById('modelName').addEventListener('input', () => updateVisionHint());
 
   // 接口格式联动（Ollama 提示 / 默认 URL / Key 占位符）
   document.getElementById('apiFormat').addEventListener('change', () => {
@@ -521,7 +572,12 @@ export function bindModelActions({ onSaved }) {
     const apiKey = document.getElementById('apiKey').value.trim();
     const apiFormat = document.getElementById('apiFormat').value;
     const model = document.getElementById('modelName').value.trim();
-    const contextLimit = Math.max(1000, parseInt(document.getElementById('contextLimit').value, 10) || 128000);
+    // 留空（或填 0 / 非法值）= 0 = 不做本地上限检查，交给模型自己的上限
+    const contextParsed = parseInt(document.getElementById('contextLimit').value, 10);
+    const contextLimit = Number.isFinite(contextParsed) && contextParsed > 0 ? Math.max(1000, contextParsed) : 0;
+    // 留空 = 0 = 回到默认的 8192
+    const outputParsed = parseInt(document.getElementById('maxOutputTokens').value, 10);
+    const maxOutputTokens = Number.isFinite(outputParsed) && outputParsed > 0 ? Math.max(512, outputParsed) : 0;
     const rememberKey = document.getElementById('rememberKey').checked;
     const needKey = apiFormat !== 'ollama';
     if (!apiUrl || !model || (needKey && !apiKey)) {
@@ -539,11 +595,14 @@ export function bindModelActions({ onSaved }) {
       apiFormat,
       model,
       contextLimit,
+      maxOutputTokens,
       rememberKey,
     });
     rememberProfile(next);
     renderProfiles();
     renderConnectionStatus();
+    updateVisionHint();
+    refreshChatMonitor(); // 上下文上限改了，Chat 侧的占比条要跟着变
     toast('Configuration saved', 'success');
     onSaved?.();
   });
@@ -614,13 +673,12 @@ function escapeAttr(s) {
 /* Reading plan 上的 Max pages 改动要刷新上传统计，这里留一个引用 */
 let uploadFiles = [];
 
-export function bindUploadActions({ files, onScan, onSkip, onFilesChanged }) {
+export function bindUploadActions({ files, onScan, onFilesChanged }) {
   uploadFiles = files;
   const dropzone = document.getElementById('dropzone');
   const fileInput = document.getElementById('fileInput');
   const browseBtn = document.getElementById('browseBtn');
   const scanBtn = document.getElementById('scanBtn');
-  const skipBtn = document.getElementById('skipSuggestBtn');
   const clearBtn = document.getElementById('clearFilesBtn');
   const fullDocBox = document.getElementById('suggestFullDoc');
 
@@ -674,11 +732,6 @@ export function bindUploadActions({ files, onScan, onSkip, onFilesChanged }) {
     if (!files.length) return;
     onScan?.(files.slice());
   });
-
-  skipBtn.addEventListener('click', () => {
-    if (!files.length) return;
-    onSkip?.(files.slice());
-  });
 }
 
 /** @returns {File[]} 被拒绝的文件（格式不支持） */
@@ -722,7 +775,6 @@ function renderFileList(files, refresh) {
 function updateUploadButtons(files) {
   const empty = files.length === 0;
   document.getElementById('scanBtn').disabled = empty;
-  document.getElementById('skipSuggestBtn').disabled = empty;
   document.getElementById('clearFilesBtn').disabled = empty;
   renderUploadStats(files);
 }
@@ -739,29 +791,45 @@ function renderUploadStats(files) {
   set('files', String(files.length));
   set('size', (bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1));
   set('cap', cap > 0 ? String(cap) : 'All');
+  refreshVisionWarning(files);
 }
 
 /* ---------------- suggested focus (reading plan · step 1) ----------------
-   docs: [{ name, status, docType, docSummary, sampled, items, selected:Set, error }] */
+   docs: [{ name, status, docType, readerGoal, docSummary, sampled, items, selected:Set, error }] */
 
 const FOCUS_STATUS = {
+  idle: ['Not scanned', 'pending'],
   pending: ['Queued', 'pending'],
   working: ['Reading', 'processing'],
   done: ['Ready', 'done'],
   error: ['Failed', 'error'],
 };
 
-export function renderFocusSuggestions(docs, { onToggle, onRetry } = {}) {
+export function renderFocusSuggestions(docs, { onToggle, onRetry, onSuggest } = {}) {
   const root = document.getElementById('focusSuggestions');
   if (!root) return;
   root.innerHTML = '';
   const list = docs || [];
 
   if (!list.length) {
-    root.innerHTML =
-      '<p class="empty-state">Nothing scanned yet. Upload a document and run “Scan &amp; suggest focus”.</p>';
+    root.innerHTML = '<p class="empty-state">Nothing suggested yet. Upload a document first.</p>';
     updateFocusButtons(list);
     return;
+  }
+
+  // 一条角度都还没有时，把"开始"做成这一栏里的主按钮，不让用户去猜该点哪里
+  const busy = list.some((d) => d.status === 'working' || d.status === 'pending');
+  if (!list.some((d) => d.items?.length)) {
+    const cta = document.createElement('div');
+    cta.className = 'actions';
+    const btn = document.createElement('button');
+    btn.className = 'primary';
+    btn.id = 'suggestFocusBtn';
+    btn.textContent = busy ? 'Reading the documents…' : 'Suggest focus angles';
+    btn.disabled = busy;
+    btn.addEventListener('click', () => onSuggest?.());
+    cta.appendChild(btn);
+    root.appendChild(cta);
   }
 
   list.forEach((doc, docIdx) => {
@@ -798,16 +866,22 @@ export function renderFocusSuggestions(docs, { onToggle, onRetry } = {}) {
       note.textContent =
         doc.status === 'working'
           ? doc.statusText || 'Reading the document and working out what is worth learning from it…'
-          : 'Waiting to start…';
+          : doc.status === 'idle'
+            ? 'Not scanned yet — nothing has been sent to the model.'
+            : 'Waiting to start…';
       group.appendChild(note);
       root.appendChild(group);
       return;
     }
 
-    if (doc.docSummary || doc.sampled) {
+    if (doc.docSummary || doc.readerGoal || doc.sampled) {
       const note = document.createElement('p');
       note.className = 'hint small';
-      note.textContent = [doc.docSummary, doc.sampled ? '(Suggested from a sample of the document.)' : '']
+      note.textContent = [
+        doc.docSummary,
+        doc.readerGoal ? `Read for: ${doc.readerGoal}` : '',
+        doc.sampled ? '(Suggested from a sample of the document.)' : '',
+      ]
         .filter(Boolean)
         .join(' ');
       group.appendChild(note);
@@ -851,7 +925,7 @@ function updateFocusButtons(docs) {
     selectAll.disabled = !anyItems;
     selectAll.textContent = allSelected ? 'Select none' : 'Select all';
   }
-  if (resuggest) resuggest.disabled = !(docs || []).length;
+  if (resuggest) resuggest.disabled = !anyItems;
 }
 
 /** Reading plan 底部的「Start analysis」：只要队列里有文档就可以点 */
@@ -1035,6 +1109,14 @@ export function renderItemResult(idx, payload, onRetry) {
   if (usage?.output != null) parts.push(`out <strong>${usage.output.toLocaleString()}</strong>`);
   if (parts.length) usageLine.innerHTML = 'Tokens — ' + parts.join(' · ');
   if (parts.length) body.appendChild(usageLine);
+  // 模型写到一半被 max_tokens 砍断：JSON 靠修复器救了回来，但尾部的维度多半是缺的
+  if (payload.truncated) {
+    const warn = document.createElement('p');
+    warn.className = 'notice-block';
+    warn.textContent =
+      'The model ran out of output room, so the end of this reading was cut off — the last sections may be missing or unfinished. Raise “Max output tokens” in Model & API, or enable fewer sections, then retry.';
+    body.appendChild(warn);
+  }
   sectionsUsed.forEach((s) => {
     const block = document.createElement('div');
     block.className = 'section-block';
@@ -1333,7 +1415,8 @@ export function getChatContext() {
 
 function refreshChatMonitor() {
   const cfg = getConfig();
-  const limit = cfg.contextLimit || 128000;
+  // 0 = 用户没设上限，交给模型自己：只报估算值，不画占比、不拦发送
+  const limit = cfg.contextLimit || 0;
   const input = document.getElementById('chatInput');
   const userText = input?.value || '';
   const { systemPrompt, sourceParts } = buildContextText();
@@ -1353,15 +1436,20 @@ function refreshChatMonitor() {
   const lastEl = document.getElementById('chatLastTokens');
 
   if (estEl) estEl.textContent = est.toLocaleString();
-  if (limitEl) limitEl.textContent = limit.toLocaleString();
-  if (fill) {
+  if (limitEl) limitEl.textContent = limit ? limit.toLocaleString() : 'Model maximum';
+  const bar = document.getElementById('chatUsageBar');
+  if (bar) bar.hidden = !limit;
+  if (fill && limit) {
     const pct = Math.min(100, Math.round((est / limit) * 100));
     fill.style.width = pct + '%';
     fill.classList.toggle('warning', pct >= 70 && pct < 95);
     fill.classList.toggle('danger', pct >= 95);
   }
   if (warn) {
-    if (est >= limit) {
+    if (!limit) {
+      warn.hidden = true;
+      warn.textContent = '';
+    } else if (est >= limit) {
       warn.hidden = false;
       warn.textContent = `Estimated input is ${(est - limit).toLocaleString()} tokens over the context limit. Deselect some documents, stop attaching the original document, or raise the limit.`;
     } else if (est >= limit * 0.85) {
@@ -1379,7 +1467,7 @@ function refreshChatMonitor() {
       : '—';
   }
   if (sendBtn) {
-    const can = userText.trim().length > 0 && chatState.selected.size > 0 && est < limit;
+    const can = userText.trim().length > 0 && chatState.selected.size > 0 && (!limit || est < limit);
     sendBtn.disabled = !can;
   }
   if (composerHint) {

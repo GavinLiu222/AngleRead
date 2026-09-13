@@ -7,7 +7,7 @@
   <!-- tints the browser URL bar to match the top strip -->
   <meta name="theme-color" content="#DCEEFB" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#13283A" media="(prefers-color-scheme: dark)" />
-  <title>ThesisReader — Document reading assistant</title>
+  <title>AngleRead — Document reading assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" />
@@ -43,7 +43,7 @@
               <path d="M12 6.8v12.9" />
             </svg>
           </span>
-          <span class="brand-text">ThesisReader</span>
+          <span class="brand-text">AngleRead</span>
           <span class="brand-chip">Reader</span>
         </div>
 
@@ -124,7 +124,7 @@
           <span class="bar"></span>
           <span class="bar"></span>
         </button>
-        <span class="topbar-brand">ThesisReader</span>
+        <span class="topbar-brand">AngleRead</span>
       </header>
 
       <main class="app-main">
@@ -170,14 +170,15 @@
 
       <div id="fileList" class="file-list"></div>
 
+      <p class="hint small ollama-hint" id="uploadVisionWarn" hidden></p>
+
       <label class="auto-suggest-row">
         <input type="checkbox" id="suggestFullDoc" />
         <span>Use the full document when guessing what to read for. Off by default: only a sample (the first pages and the last pages, or the opening and ending of a text document) is sent, which is enough for good suggestions and far cheaper on long reports.</span>
       </label>
 
       <div class="actions">
-        <button class="primary" id="scanBtn" disabled>Scan &amp; suggest focus<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13.5M13 6.2l6 5.8-6 5.8" /></svg></span></button>
-        <button class="ghost" id="skipSuggestBtn" disabled>Skip suggestions</button>
+        <button class="primary" id="scanBtn" disabled>Continue to reading plan<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13.5M13 6.2l6 5.8-6 5.8" /></svg></span></button>
         <button class="ghost" id="clearFilesBtn" disabled>Clear list</button>
       </div>
     </section>
@@ -187,23 +188,26 @@
       <div class="view-head">
         <span class="eyebrow">Reading plan</span>
         <h2>What to read for</h2>
-        <p class="hint">Pick the angles the model proposes for each uploaded document, then fine-tune the fixed sections it always produces.</p>
+        <p class="hint">Set the language first, pick the angles the model proposes for each uploaded document, then fine-tune the fixed sections it always produces.</p>
       </div>
 
       <section class="panel">
         <div class="panel-head">
           <div>
             <span class="panel-eyebrow">Step 1</span>
-            <h3>Suggested focus</h3>
-          </div>
-          <div class="panel-actions">
-            <button class="ghost" id="selectAllFocusBtn" disabled>Select all</button>
-            <button class="ghost" id="resuggestBtn" disabled>Re-suggest</button>
+            <h3>Report language</h3>
           </div>
         </div>
-        <p class="hint">After an upload the model reads each document, works out what it is and guesses what you would want to learn from it. Tick the angles you want — each one becomes an extra section in the analysis, alongside the sections below.</p>
-        <div id="focusSuggestions" class="focus-list">
-          <p class="empty-state">Nothing scanned yet. Upload a document and run “Scan &amp; suggest focus”.</p>
+        <p class="hint">Everything the model writes comes back in this language — the suggested angles below as well as the finished reading. It takes effect on the next call, so a document already scanned keeps the angles it came back with; hit <strong>Re-suggest</strong> to redo them in the new language.</p>
+        <div class="segmented" id="reportLanguage" role="radiogroup" aria-label="Report language">
+          <label class="segment">
+            <input type="radio" name="reportLanguage" value="en" checked />
+            <span>English</span>
+          </label>
+          <label class="segment">
+            <input type="radio" name="reportLanguage" value="zh" />
+            <span>中文</span>
+          </label>
         </div>
       </section>
 
@@ -211,6 +215,23 @@
         <div class="panel-head">
           <div>
             <span class="panel-eyebrow">Step 2</span>
+            <h3>Suggested focus</h3>
+          </div>
+          <div class="panel-actions">
+            <button class="ghost" id="selectAllFocusBtn" disabled>Select all</button>
+            <button class="ghost" id="resuggestBtn" disabled>Re-suggest</button>
+          </div>
+        </div>
+        <p class="hint">Nothing is sent until you ask for it. Press <strong>Suggest focus angles</strong> and the model reads each uploaded document, works out what it is and guesses what you would want to learn from it. Tick the angles you want — each one becomes an extra section in the analysis, alongside the sections below.</p>
+        <div id="focusSuggestions" class="focus-list">
+          <p class="empty-state">Nothing suggested yet. Upload a document first.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="panel-eyebrow">Step 3</span>
             <h3>Analysis sections</h3>
           </div>
           <div class="panel-actions">
@@ -220,20 +241,6 @@
         </div>
 
         <div class="form-grid">
-          <div class="form-row span-6">
-            <span>Report language</span>
-            <div class="segmented" id="reportLanguage" role="radiogroup" aria-label="Report language">
-              <label class="segment">
-                <input type="radio" name="reportLanguage" value="en" checked />
-                <span>English</span>
-              </label>
-              <label class="segment">
-                <input type="radio" name="reportLanguage" value="zh" />
-                <span>中文</span>
-              </label>
-            </div>
-          </div>
-
           <label class="form-row span-6">
             <span>Max pages per document (0 = no limit)</span>
             <input type="number" id="maxPages" min="0" value="0" />
@@ -322,9 +329,9 @@
             </div>
             <div class="monitor-line">
               <span>Context limit</span>
-              <strong id="chatLimit">128000</strong>
+              <strong id="chatLimit">Model maximum</strong>
             </div>
-            <div class="progress-bar"><div class="progress-bar-fill" id="chatUsageFill"></div></div>
+            <div class="progress-bar" id="chatUsageBar"><div class="progress-bar-fill" id="chatUsageFill"></div></div>
             <p class="monitor-warning" id="chatWarning" hidden></p>
           </div>
           <button class="ghost" id="chatClearBtn">Clear chat</button>
@@ -353,7 +360,7 @@
       </div>
 
       <div class="notice notice-blue" data-notice="vision">
-        <p>PDF pages and uploaded images reach the model as images, so reading those requires a vision-capable model — a text-only model returns empty sections. Word, Markdown and plain-text documents are sent as text and work with any model. The model picker lists vision-capable models grouped by provider.</p>
+        <p>PDF pages and uploaded images reach the model as images, so reading those requires a vision-capable model — a text-only model returns empty sections. Word, Markdown and plain-text documents are sent as text and work with any model. The model picker groups models by provider and marks the text-only ones.</p>
         <button type="button" class="notice-ok" data-dismiss="notice">Got it</button>
       </div>
 
@@ -424,14 +431,25 @@
           <div class="model-chips" id="modelChips"></div>
         </div>
 
+        <p class="hint small ollama-hint" id="visionHint" hidden>
+          <strong>This model has no vision input.</strong> It can read Word, Markdown and plain-text documents, but
+          <strong>PDF pages and images will come back empty</strong> — those are sent to the model as page images.
+          Pick a vision-capable model from the list to read them.
+        </p>
+
         <p class="hint small ollama-hint" id="ollamaHint" hidden>
           Local Ollama: the URL is usually <code>http://localhost:11434</code> and no API key is needed. Use <strong>Fetch models</strong> to list the models you have pulled.
           If that fails, start Ollama with <code>OLLAMA_ORIGINS=*</code> so the browser is allowed to reach it. Reading figures and equations requires a vision-capable model such as <code>llama3.2-vision</code> or <code>llava</code>.
         </p>
 
         <label class="form-row span-5">
-          <span>Context limit (tokens)</span>
-          <input type="number" id="contextLimit" min="1000" step="1000" value="128000" />
+          <span>Context limit (tokens)<br /><small>Leave it empty to use whatever the model itself allows</small></span>
+          <input type="number" id="contextLimit" min="1000" step="1000" placeholder="Model maximum" />
+        </label>
+
+        <label class="form-row span-5">
+          <span>Max output tokens<br /><small>Raise it if the report comes back cut off mid-sentence</small></span>
+          <input type="number" id="maxOutputTokens" min="512" step="1024" placeholder="32768" />
         </label>
 
         <label class="form-row checkbox-row span-12">

@@ -1,6 +1,26 @@
-const CONFIG_KEY = 'thesisReader.config';
-const SECTIONS_KEY = 'thesisReader.sections';
-const PROFILES_KEY = 'thesisReader.profiles';
+/* 项目原名 ThesisReader，改名 AngleRead 后本机存的键跟着换前缀。
+   老键还在就搬一次再删掉，用户已有的配置、维度、档案不会因为改名丢掉。
+   等到确信没人再带着老键回来，这个函数连同 LEGACY_PREFIX 可以一并删除。 */
+const STORAGE_PREFIX = 'angleRead.';
+const LEGACY_PREFIX = 'thesisReader.';
+
+function migrateLegacyStorage() {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (!key.startsWith(LEGACY_PREFIX)) continue;
+      const renamed = STORAGE_PREFIX + key.slice(LEGACY_PREFIX.length);
+      if (localStorage.getItem(renamed) === null) localStorage.setItem(renamed, localStorage.getItem(key));
+      localStorage.removeItem(key);
+    }
+  } catch {
+    // 隐私模式下 localStorage 不可读写，那本来也没有旧数据可搬
+  }
+}
+migrateLegacyStorage();
+
+const CONFIG_KEY = STORAGE_PREFIX + 'config';
+const SECTIONS_KEY = STORAGE_PREFIX + 'sections';
+const PROFILES_KEY = STORAGE_PREFIX + 'profiles';
 const SESSION_KEY_HOLDER = { apiKey: '' };
 
 const DEFAULT_CONFIG = {
@@ -10,6 +30,10 @@ const DEFAULT_CONFIG = {
   model: '',
   maxPages: 0,
   contextLimit: 128000,
+  // 输出上限。整份阅读报告是一次性生成的，「八个维度 + 自选角度」本来就写得长，
+  // 推理模型还要先在思考链里花掉一大截额度——给小了正文会直接是空的。
+  // 这是上限不是目标，用不到就不花钱，所以默认给足，端点不接受时客户端会自动降档。
+  maxOutputTokens: 32768,
   rememberKey: true,
   autoSuggestSections: false,
   reportLanguage: 'en',
@@ -211,7 +235,9 @@ export function rememberProfile(cfg) {
     apiKey: cfg.rememberKey ? cfg.apiKey || '' : '',
     apiFormat: cfg.apiFormat || 'openai',
     model: cfg.model || '',
-    contextLimit: cfg.contextLimit || 128000,
+    // 0 = 留空 = 用模型自己的上限，原样记进档案
+    contextLimit: cfg.contextLimit || 0,
+    maxOutputTokens: cfg.maxOutputTokens || 0,
   };
   const sig = profileSignature(incoming);
   const idx = profiles.findIndex((p) => profileSignature(p) === sig);

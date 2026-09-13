@@ -1,5 +1,5 @@
 /* ============================================================
-   ThesisReader — design system
+   AngleRead — design system
    Vibe: Premium utilitarian minimalism (warm monochrome canvas,
          editorial serif heads, hairline structure, spot pastels)
    Layout: Console shell — fixed left rail + scrolling document column
@@ -1740,6 +1740,18 @@ button.link:hover { text-decoration-color: var(--ink); }
 }
 
 .error-block .retry { margin-top: 12px; }
+
+/* 报告出来了，但输出被截断——比 .error-block 轻一级的提示 */
+.notice-block {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--yellow-line);
+  border-radius: var(--r-md);
+  background: var(--yellow-bg);
+  color: var(--yellow-ink);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
 
 /* ============================================================
    rich content (markdown + katex)

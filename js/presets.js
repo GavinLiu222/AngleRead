@@ -38,6 +38,13 @@ export const API_PRESETS = [
     format: 'openai',
   },
   {
+    key: 'deepseek',
+    label: 'DeepSeek',
+    url: 'https://api.deepseek.com',
+    format: 'openai',
+    note: 'Flash reads images · V4-Pro does not',
+  },
+  {
     key: 'qwen',
     label: 'Alibaba Qwen',
     url: 'https://dashscope.aliyuncs.com/compatible-mode',
@@ -104,8 +111,9 @@ export const API_PRESETS = [
 ];
 
 /**
- * 只收录**支持视觉输入**的模型——本工具把 PDF 逐页渲染成图片喂给模型，
- * 纯文本模型无法解读图表与公式截图。
+ * 以**支持视觉输入**的模型为主——本工具把 PDF 与图片逐页渲染成图片喂给模型，
+ * 纯文本模型无法解读图表与公式截图。少数纯文本模型（如 DeepSeek-V4-Pro）也一并收录，
+ * 用 `vision: false` 标记、条目注记里写明 no vision：它们能读 Word / Markdown / 纯文本，读不了 PDF 与图片。
  */
 export const MODEL_PRESETS = [
   {
@@ -150,6 +158,14 @@ export const MODEL_PRESETS = [
     items: [{ id: 'pixtral-large-latest' }, { id: 'pixtral-12b-2409' }],
   },
   {
+    key: 'deepseek',
+    group: 'DeepSeek',
+    items: [
+      { id: 'deepseek-flash', note: 'DeepSeek-V4.1-Flash · vision · 1M context' },
+      { id: 'deepseek-v4-pro', note: 'DeepSeek-V4-Pro-0813 · no vision · 1M context', vision: false },
+    ],
+  },
+  {
     key: 'qwen',
     group: 'Alibaba Qwen',
     items: [
@@ -192,6 +208,34 @@ export const MODEL_PRESETS = [
     ],
   },
 ];
+
+/* 已知的纯文本模型家族。只写有把握的规则——误报会让提示变成噪音，
+   拿不准时返回 'unknown'，界面就不提示。 */
+const TEXT_ONLY_HINTS = [
+  /^deepseek-v4-pro/,                      // DeepSeek 只有 V4-Pro 不读图，Flash 读图
+  /^gpt-3\.5/,
+  /^(mistral|mixtral|ministral|codestral)/, // Mistral 的视觉线叫 pixtral
+  /^qwen(?!.*vl)/,                         // 通义只有 *-vl-* 支持视觉
+  /^glm-4(?!v)/,                           // 智谱视觉模型带 v
+  /^moonshot(?!.*vision)/,
+  /llama(?!.*vision)/,                     // Llama 只有 *-vision 读图
+  /^(gemma|phi|yi-(?!vl)|baichuan|nemotron)/,
+];
+
+/**
+ * 猜某个模型是否支持视觉输入。PDF 与图片是逐页喂图的，纯文本模型读不出来。
+ * @returns {'yes'|'no'|'unknown'} 清单内按清单判断，清单外用上面的规则，再拿不准就 'unknown'
+ */
+export function modelVisionSupport(model) {
+  const id = String(model || '').trim().toLowerCase();
+  if (!id) return 'unknown';
+  for (const group of MODEL_PRESETS) {
+    for (const item of group.items) {
+      if (item.id.toLowerCase() === id) return item.vision === false ? 'no' : 'yes';
+    }
+  }
+  return TEXT_ONLY_HINTS.some((re) => re.test(id)) ? 'no' : 'unknown';
+}
 
 /** 根据当前的 API 地址 / 接口格式猜出服务商，用于把对应的模型分组置顶。 */
 export function guessProviderKey({ apiUrl, apiFormat } = {}) {

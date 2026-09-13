@@ -1,6 +1,24 @@
 import { stripBase64Prefix, dataUrlMediaType } from './docProcessor.js';
 
 const IMAGE_TOKEN_ESTIMATE = 1500;
+/* 推理模型把思考链也算进输出额度里，而且往往会在思考里把每个章节都先草拟一遍——
+   8192 根本不够它想完再写，正文会是空的。max_tokens 只是上限、不是目标，给大了
+   对普通模型一分钱不多花，所以默认给足；端点如果不接受，下面的兜底会自动降档。 */
+const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
+/* 端点拒绝大额度、报错里又没写明上限时退回的保守值 */
+const SAFE_MAX_OUTPUT_TOKENS = 8192;
+
+/** 用户没填就用默认值；夹在一个合理区间里，免得手滑填个 10 让每次请求都被截断 */
+function outputBudget(config) {
+  const n = Number(config?.maxOutputTokens);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_MAX_OUTPUT_TOKENS;
+  return Math.min(Math.max(Math.round(n), 512), 200000);
+}
+
+/** 各家对「输出被 max_tokens 砍断」的叫法 */
+function isLengthFinish(reason) {
+  return /^(length|max_tokens|model_length|output_limit)$/i.test(String(reason || ''));
+}
 
 function joinUrl(base, path) {
   if (!base) return path;
@@ -38,7 +56,10 @@ async function postJson(url, headers, body) {
       const obj = JSON.parse(text);
       detail = obj.error?.message || obj.message || text;
     } catch {}
-    throw new Error(`HTTP ${res.status}: ${detail.slice(0, 400)}`);
+    const err = new Error(`HTTP ${res.status}: ${detail.slice(0, 400)}`);
+    err.status = res.status;
+    err.detail = detail;
+    throw err;
   }
   try {
     return JSON.parse(text);
@@ -47,6 +68,7 @@ async function postJson(url, headers, body) {
   }
 }
 
+/** @returns {{text: string, fromReasoning: boolean}} */
 function pickOpenAIText(msg) {
   if (!msg) throw new Error('Response is missing the `message` field.');
   let text = '';
@@ -58,9 +80,10 @@ function pickOpenAIText(msg) {
   // Reasoning models (e.g. qwen3 / deepseek-r1 behind Ollama's compat layer) sometimes
   // put the answer in reasoning_content / reasoning and leave content empty.
   if (!text.trim()) {
-    text = msg.reasoning_content || msg.reasoning || text;
+    const reasoning = msg.reasoning_content || msg.reasoning || '';
+    if (reasoning.trim()) return { text: reasoning, fromReasoning: true };
   }
-  return text;
+  return { text, fromReasoning: false };
 }
 
 function pickAnthropicText(parts) {
@@ -136,30 +159,128 @@ function buildAnthropicContent(prompt, parts) {
   return content;
 }
 
-async function callOpenAI({ apiUrl, apiKey, model }, prompt, parts) {
+/* JSON 模式（`response_format: {type:'json_object'}`）是挡住「先讲一段思路再给 JSON」
+   的第一道闸。OpenAI / DeepSeek / Ollama 的兼容层都支持，但不少自建网关不认，
+   被拒过一次就记下来，同一个端点以后直接不带这个参数。 */
+const jsonModeUnsupported = new Set();
+
+function endpointKey({ apiUrl, model }) {
+  return `${apiUrl || ''}|${model || ''}`;
+}
+
+function looksLikeJsonModeRejection(err) {
+  if (!err || !(err.status >= 400 && err.status < 500)) return false;
+  const text = String(err.detail || err.message || '');
+  // "Unsupported parameter: max_tokens…" 也含 unsupported，但那是额度的事，别记错账
+  if (/max[_ ]?(completion[_ ]?)?tokens/i.test(text)) return false;
+  return /response_format|json[_ ]?object|json[_ ]?schema|json mode|unsupported|unrecognized|unknown (parameter|field|argument)/i.test(
+    text,
+  );
+}
+
+/* 端点对输出额度的两种拒绝：一是超过该模型允许的上限，二是新版接口把参数改叫
+   max_completion_tokens。都记在端点上，下次直接按已知的规矩发。 */
+const maxTokensCap = new Map();
+const maxTokensRenamed = new Set();
+
+function maxTokensRejection(err, current) {
+  if (!err || !(err.status >= 400 && err.status < 500)) return null;
+  const text = String(err.detail || err.message || '');
+  if (!/max[_ ]?(completion[_ ]?)?tokens/i.test(text)) return null;
+  if (/max_completion_tokens/i.test(text)) return { rename: true };
+  // 报错里通常直接写着这个模型允许的上限，取其中比当前值小的最大数字；
+  // 认不出来就对半砍——32768 → 8192 → 4096 两步就能罩住常见的真实上限，
+  // 而每多试一次都要把整份文档（含页面图片）重发一遍，不能慢慢试
+  const found = (text.match(/\d{3,7}/g) || []).map(Number).filter((n) => n >= 256 && n < current);
+  const limit = found.length
+    ? Math.max(...found)
+    : Math.min(SAFE_MAX_OUTPUT_TOKENS, Math.floor(current / 2));
+  return limit >= 256 ? { limit } : null;
+}
+
+/** 带自愈的 POST：JSON 模式与输出额度被拒时各修一次，修不动就把原始错误抛出去 */
+async function postChat(url, headers, body, key) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await postJson(url, headers, body);
+    } catch (err) {
+      if (attempt >= 2) throw err;
+      // 先判额度：它的特征更具体，错判成 JSON 模式会白白多发一次请求，
+      // 还会把一个其实支持 JSON 模式的端点记成不支持
+      const current = body.max_tokens ?? body.max_completion_tokens;
+      const fix = maxTokensRejection(err, current);
+      if (fix?.rename && !('max_completion_tokens' in body)) {
+        maxTokensRenamed.add(key);
+        body.max_completion_tokens = current;
+        delete body.max_tokens;
+        continue;
+      }
+      if (fix?.limit) {
+        maxTokensCap.set(key, fix.limit);
+        if ('max_completion_tokens' in body) body.max_completion_tokens = fix.limit;
+        else body.max_tokens = fix.limit;
+        continue;
+      }
+      if (body.response_format && looksLikeJsonModeRejection(err)) {
+        jsonModeUnsupported.add(key);
+        delete body.response_format;
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/** 按这个端点已知的规矩写进 max_tokens / max_completion_tokens */
+function applyOutputBudget(body, config, key) {
+  const cap = maxTokensCap.get(key);
+  const budget = cap ? Math.min(cap, outputBudget(config)) : outputBudget(config);
+  if (maxTokensRenamed.has(key)) body.max_completion_tokens = budget;
+  else body.max_tokens = budget;
+  return body;
+}
+
+async function callOpenAI(config, prompt, parts, { json = false } = {}) {
+  const { apiUrl, apiKey, model } = config;
   const url = apiEndpoint(apiUrl, 'chat/completions');
   const content = buildOpenAIContent(prompt, parts);
-  const body = {
-    model,
-    messages: [{ role: 'user', content }],
-    temperature: 0.5,
-    max_tokens: 8192,
-  };
-  const data = await postJson(url, { Authorization: `Bearer ${apiKey}` }, body);
+  const headers = { Authorization: `Bearer ${apiKey}` };
+  const key = endpointKey(config);
+  const body = applyOutputBudget(
+    {
+      model,
+      messages: [{ role: 'user', content }],
+      temperature: 0.5,
+    },
+    config,
+    key,
+  );
+  if (json && !jsonModeUnsupported.has(key)) body.response_format = { type: 'json_object' };
+  const data = await postChat(url, headers, body, key);
+  const choice = data.choices?.[0];
+  const { text, fromReasoning } = pickOpenAIText(choice?.message);
   return {
-    text: pickOpenAIText(data.choices?.[0]?.message),
+    text,
     usage: normalizeOpenAIUsage(data.usage),
+    truncated: isLengthFinish(choice?.finish_reason ?? choice?.native_finish_reason),
+    // 只剩思考链、正文是空的：额度全烧在思考上了
+    reasoningOnly: fromReasoning,
   };
 }
 
-async function callAnthropic({ apiUrl, apiKey, model }, prompt, parts) {
+async function callAnthropic(config, prompt, parts, { json = false } = {}) {
+  const { apiUrl, apiKey, model } = config;
   const url = apiEndpoint(apiUrl, 'messages');
   const content = buildAnthropicContent(prompt, parts);
+  const messages = [{ role: 'user', content }];
+  // Anthropic 没有 response_format，改用 assistant 预填：让模型从 `{` 续写，
+  // 「先写一段开场白」这条路就走不通了
+  if (json) messages.push({ role: 'assistant', content: [{ type: 'text', text: '{' }] });
   const body = {
     model,
-    max_tokens: 8192,
+    max_tokens: outputBudget(config),
     temperature: 0.5,
-    messages: [{ role: 'user', content }],
+    messages,
   };
   const data = await postJson(
     url,
@@ -170,9 +291,13 @@ async function callAnthropic({ apiUrl, apiKey, model }, prompt, parts) {
     },
     body,
   );
+  let text = pickAnthropicText(data.content);
+  // 预填的 `{` 不在回复里，得补回去；若网关忽略了预填、回复已自带开头就别重复补
+  if (json && !/^\s*(\{|```)/.test(text)) text = '{' + text;
   return {
-    text: pickAnthropicText(data.content),
+    text,
     usage: normalizeAnthropicUsage(data.usage),
+    truncated: data.stop_reason === 'max_tokens',
   };
 }
 
@@ -185,12 +310,19 @@ function normalizeForOpenAI(config) {
   return config;
 }
 
-export async function callLLM(config, prompt, parts) {
+/**
+ * Single-shot completion.
+ * @param {object} options
+ * @param {boolean} [options.json] ask the endpoint for a strict JSON object rather than free text
+ * @returns {Promise<{text:string, usage:object|null, truncated:boolean}>}
+ *   `truncated` is true when the provider says the answer was cut off at max_tokens.
+ */
+export async function callLLM(config, prompt, parts, options = {}) {
   assertConfig(config);
   if (config.apiFormat === 'anthropic') {
-    return callAnthropic(config, prompt, parts);
+    return callAnthropic(config, prompt, parts, options);
   }
-  return callOpenAI(normalizeForOpenAI(config), prompt, parts);
+  return callOpenAI(normalizeForOpenAI(config), prompt, parts, options);
 }
 
 /* ---------------- chat (multi-turn) ---------------- */
@@ -210,7 +342,8 @@ export async function chatLLM(config, systemPrompt, turns) {
   return chatOpenAI(normalizeForOpenAI(config), systemPrompt, turns);
 }
 
-async function chatOpenAI({ apiUrl, apiKey, model }, systemPrompt, turns) {
+async function chatOpenAI(config, systemPrompt, turns) {
+  const { apiUrl, apiKey, model } = config;
   const url = apiEndpoint(apiUrl, 'chat/completions');
   const messages = [];
   if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
@@ -221,15 +354,17 @@ async function chatOpenAI({ apiUrl, apiKey, model }, systemPrompt, turns) {
       messages.push({ role: t.role, content: t.text || '' });
     }
   }
-  const body = { model, messages, temperature: 0.5, max_tokens: 4096 };
-  const data = await postJson(url, { Authorization: `Bearer ${apiKey}` }, body);
+  const key = endpointKey(config);
+  const body = applyOutputBudget({ model, messages, temperature: 0.5 }, config, key);
+  const data = await postChat(url, { Authorization: `Bearer ${apiKey}` }, body, key);
   return {
-    text: pickOpenAIText(data.choices?.[0]?.message),
+    text: pickOpenAIText(data.choices?.[0]?.message).text,
     usage: normalizeOpenAIUsage(data.usage),
   };
 }
 
-async function chatAnthropic({ apiUrl, apiKey, model }, systemPrompt, turns) {
+async function chatAnthropic(config, systemPrompt, turns) {
+  const { apiUrl, apiKey, model } = config;
   const url = apiEndpoint(apiUrl, 'messages');
   const messages = [];
   for (const t of turns) {
@@ -241,7 +376,7 @@ async function chatAnthropic({ apiUrl, apiKey, model }, systemPrompt, turns) {
   }
   const body = {
     model,
-    max_tokens: 4096,
+    max_tokens: outputBudget(config),
     temperature: 0.5,
     messages,
   };

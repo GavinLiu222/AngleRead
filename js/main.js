@@ -1,8 +1,9 @@
 import { isConfigReady, getConfig } from './config.js';
+import { modelVisionSupport } from './presets.js';
+import { fileKind, prunePrepareCache } from './docProcessor.js';
 import { analyzeOne, analyzeAll } from './analyzer.js';
 import { suggestAll } from './suggester.js';
 import { chatLLM } from './llmClient.js';
-import { prunePrepareCache } from './docProcessor.js';
 import {
   switchView,
   toast,
@@ -21,6 +22,7 @@ import {
   updateProgress,
   setChatPapers,
   bindChatActions,
+  refreshVisionWarning,
 } from './ui.js';
 
 const state = {
@@ -59,9 +61,10 @@ function syncDocs() {
       existing.get(file) || {
         file,
         name: file.name,
-        status: 'pending',
+        status: 'idle',
         statusText: '',
         docType: '',
+        readerGoal: '',
         docSummary: '',
         sampled: false,
         items: [],
@@ -87,6 +90,7 @@ function renderFocus() {
       const doc = state.docs[docIdx];
       if (doc) runSuggestions([doc.file]);
     },
+    onSuggest: () => runSuggestions(state.files.slice()),
   });
 }
 
@@ -96,6 +100,9 @@ function suggestProgressText(info) {
   if (info.stage === 'llm-calling') {
     const tail = info.estimatedTokens ? ` (about ${info.estimatedTokens.toLocaleString()} tokens)` : '';
     return `Working out what is worth learning from it${tail}…`;
+  }
+  if (info.stage === 'llm-retrying') {
+    return 'No usable angles came back — asking once more…';
   }
   return '';
 }
@@ -107,6 +114,7 @@ async function runSuggestions(files) {
     switchView('model');
     return;
   }
+  warnIfModelCannotSeeImages(files);
   const full = getConfig().suggestFullDoc;
   for (const file of files) {
     const doc = docFor(file);
@@ -137,6 +145,7 @@ async function runSuggestions(files) {
       if (!doc) return;
       doc.status = 'done';
       doc.docType = payload.docType;
+      doc.readerGoal = payload.readerGoal;
       doc.docSummary = payload.docSummary;
       doc.sampled = payload.sampled;
       doc.items = payload.items;
@@ -272,13 +281,26 @@ async function handleChatSend({ systemPrompt, turns }) {
 
 /* ---------------- boot ---------------- */
 
+/* 纯文本模型 + PDF / 图片 = 空章节。Upload 页已有常驻提示，这里在真正开跑前再喊一声。 */
+function warnIfModelCannotSeeImages(files) {
+  const model = getConfig().model;
+  if (modelVisionSupport(model) !== 'no') return false;
+  const blocked = (files || []).filter((f) => ['pdf', 'image'].includes(fileKind(f)));
+  if (!blocked.length) return false;
+  toast(`${model} cannot read images — the PDF and image files will come back empty`, 'error');
+  return true;
+}
+
 function boot() {
   bindNav();
   renderModelView();
   renderPlanView();
 
   bindModelActions({
-    onSaved: () => switchView(state.files.length ? 'plan' : 'upload'),
+    onSaved: () => {
+      refreshVisionWarning(state.files);
+      switchView(state.files.length ? 'plan' : 'upload');
+    },
   });
 
   bindPlanActions({
@@ -293,6 +315,7 @@ function boot() {
         switchView('model');
         return;
       }
+      warnIfModelCannotSeeImages(state.files);
       startAnalysis(state.files.slice());
     },
     onResuggest: () => runSuggestions(state.files.slice()),
@@ -301,16 +324,8 @@ function boot() {
 
   bindUploadActions({
     files: state.files,
-    onScan: (files) => {
-      if (!isConfigReady()) {
-        toast('Connect a model first', 'error');
-        switchView('model');
-        return;
-      }
-      switchView('plan');
-      runSuggestions(files);
-    },
-    onSkip: () => switchView('plan'),
+    // 上传页只负责进入 Reading plan：选完语言再由 Step 2 的按钮发请求
+    onScan: () => switchView('plan'),
     onFilesChanged: syncDocs,
   });
 

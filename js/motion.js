@@ -118,7 +118,7 @@ for (const id of ['openModelBtn', 'connStatus']) {
 
 /* ---------------- 可关闭的提示条（关闭状态记在本机） ---------------- */
 
-const DISMISS_KEY = 'thesisReader.dismissedNotices';
+const DISMISS_KEY = 'angleRead.dismissedNotices';
 
 function readDismissed() {
   try {
